@@ -134,9 +134,34 @@ class Metrics:
         }
 
 
-def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbose=True):
+def build_toolset(name):
+    """Compose which tools this run may use. The LOOP never changes; only the tools do.
+
+    'assess' is the small graded core. 'apply' adds the browser tools from
+    browser_tools.py for supervised form preparation. Everything still runs
+    through tools.execute_tool, so validation is identical either way.
+    """
+    definitions = list(tools.TOOL_DEFINITIONS)
+    registry = dict(tools.TOOL_REGISTRY)
+    if name == 'apply':
+        import browser_tools
+        definitions += browser_tools.TOOL_DEFINITIONS
+        registry.update(browser_tools.TOOL_REGISTRY)
+    elif name != 'assess':
+        raise ValueError('unknown toolset %r (use: assess, apply)' % name)
+    if any('submit' in n.lower() for n in registry):
+        raise RuntimeError('refusing to run: a submission tool is registered')
+    return definitions, registry
+
+
+def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbose=True,
+              tool_definitions=None, tool_registry=None):
     """The agent loop. `client` is injectable so tests can run it without a network."""
     model = model or os.environ.get('JOB_RADAR_MODEL') or DEFAULT_MODEL
+    if tool_definitions is None:
+        tool_definitions = tools.TOOL_DEFINITIONS
+    if tool_registry is None:
+        tool_registry = tools.TOOL_REGISTRY
     metrics = Metrics()
 
     if client is None:
@@ -160,7 +185,7 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
             model=model,
             max_tokens=DEFAULT_MAX_TOKENS,
             system=SYSTEM_PROMPT,
-            tools=tools.TOOL_DEFINITIONS,
+            tools=tool_definitions,
             messages=messages,
         )
         metrics.api_calls += 1
@@ -193,7 +218,7 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
             if verbose:
                 print('[step %d] tool -> %s(%s)' % (step, block.name,
                       json.dumps(block.input, ensure_ascii=False)[:160]))
-            observation, is_error = tools.execute_tool(block.name, block.input)
+            observation, is_error = tools.execute_tool(block.name, block.input, registry=tool_registry)
             metrics.tool_calls += 1
             if is_error:
                 metrics.tool_failures += 1
@@ -249,6 +274,17 @@ def main():
     assess.add_argument('--env-file', default='.env')
     assess.add_argument('--json', action='store_true', help='Print the machine-readable run record.')
 
+    prepare = sub.add_parser('prepare', help='Supervised form preparation on a LIVE application run '
+                                             '(browser toolset). Never submits.')
+    prepare.add_argument('--run-key', required=True, help='Live application run identifier.')
+    prepare.add_argument('--goal', default='Inspect the current page, report exactly what is filled, '
+                                           'what is required and still missing, and what you would do next. '
+                                           'Do not change anything yet.')
+    prepare.add_argument('--model', default=None)
+    prepare.add_argument('--max-steps', type=int, default=DEFAULT_MAX_STEPS)
+    prepare.add_argument('--env-file', default='.env')
+    prepare.add_argument('--json', action='store_true')
+
     args = parser.parse_args()
     load_dotenv_if_present(args.env_file)
 
@@ -262,8 +298,19 @@ def main():
         }, indent=2))
         return
 
+    if args.command == 'assess':
+        task = build_assess_task(args.source)
+        definitions, registry = build_toolset('assess')
+    else:
+        task = ('You are working on live application run %r.\n\n%s\n\n'
+                'Observe the real page before acting. Never advance while required fields are '
+                'unverified. You cannot submit; final submission is the human\'s.'
+                % (args.run_key, args.goal))
+        definitions, registry = build_toolset('apply')
+
     try:
-        result = run_agent(build_assess_task(args.source), model=args.model, max_steps=args.max_steps)
+        result = run_agent(task, model=args.model, max_steps=args.max_steps,
+                           tool_definitions=definitions, tool_registry=registry)
     except RuntimeError as e:
         print('ERROR: %s' % e, file=sys.stderr)
         sys.exit(1)

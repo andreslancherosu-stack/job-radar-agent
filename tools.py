@@ -352,21 +352,25 @@ assert set(TOOL_REGISTRY) == {d['name'] for d in TOOL_DEFINITIONS}, \
     'TOOL_REGISTRY and TOOL_DEFINITIONS must describe exactly the same tools'
 
 
-def execute_tool(name, arguments):
+def execute_tool(name, arguments, registry=None):
     """Validate and run one tool call. Returns (observation_dict, is_error).
 
     Every failure is returned to the model as a readable observation instead
     of crashing the run -- a wrong argument should be recoverable by the model
     on its next turn, which is how a real agent loop behaves.
+
+    `registry` lets agent.py run an extended toolset (e.g. the browser tools)
+    through this same validation path, so no tool anywhere bypasses it.
     """
+    registry = TOOL_REGISTRY if registry is None else registry
     started = time.monotonic()
-    if name not in TOOL_REGISTRY:
+    if name not in registry:
         return ({'error': 'unknown tool %r. Allowed tools: %s'
-                          % (name, ', '.join(sorted(TOOL_REGISTRY)))}, True)
+                          % (name, ', '.join(sorted(registry)))}, True)
     if not isinstance(arguments, dict):
         return ({'error': 'tool arguments must be a JSON object'}, True)
     try:
-        observation = TOOL_REGISTRY[name](**arguments)
+        observation = registry[name](**arguments)
     except TypeError as e:
         return ({'error': 'invalid arguments for %s: %s' % (name, e)}, True)
     except ValueError as e:
