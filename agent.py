@@ -34,7 +34,7 @@ import tools
 
 DEFAULT_MODEL = 'claude-opus-5'
 DEFAULT_MAX_STEPS = 12          # hard ceiling on API calls, so a confused run cannot spin forever
-DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MAX_TOKENS = 8192   # form analysis is verbose; 4096 truncated a live run
 
 SYSTEM_PROMPT = """You are the judgment layer of Job Radar, a personal job-search assistant for one \
 candidate. You decide; deterministic Python tools supply facts and perform storage.
@@ -60,7 +60,16 @@ JUDGMENT RULES
 percentage, a score, or a hiring-probability estimate.
 - Distinguish REQUIRED from PREFERRED qualifications. Operations and leadership experience is real \
 experience, but it does not by itself satisfy a stated requirement for years of professional \
-data-science experience.
+data-science experience. Equally, do NOT silently discard it -- it is relevant professional \
+experience, just not analytics tenure.
+- MISSING EVIDENCE IS NOT EVIDENCE OF FAILURE. This is the single most common mistake, so apply it \
+literally: mark a dimension "fail" ONLY when confirmed facts establish an actual shortfall or an \
+explicit incompatibility (for example, the posting states a requirement the profile positively \
+contradicts, or states an exclusion the profile positively triggers). When the profile simply does \
+not establish whether a requirement is met, the correct status is "uncertain", not "fail". \
+"The profile does not demonstrate N years of X" is uncertainty. "The profile shows the candidate \
+cannot satisfy X" is failure. Do not confuse them, and do not let an accumulation of uncertainties \
+become a POOR FIT by default.
 - Read degree-population requirements literally (a graduate student does not automatically qualify \
 for an undergraduate-only program).
 - Assess exactly four dimensions: experience, education, work_authorization, career_fit.

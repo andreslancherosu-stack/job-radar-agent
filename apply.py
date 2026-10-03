@@ -1999,6 +1999,12 @@ def main():
     worker_start_cmd.add_argument('--url', default=None, help='Initial URL to open. Omit to reuse whatever is '
                                    'already loaded in the persistent profile (e.g. a page a human left open).')
     worker_start_cmd.add_argument('--headed', action='store_true')
+    worker_start_cmd.add_argument('--idle-cap-seconds', type=int, default=4 * 3600,
+                                   help='Close the worker after this many seconds with NO commands '
+                                        '(crash-guard). Use 0 to disable, for a long supervised session '
+                                        'where a human is editing the page and automated commands are '
+                                        'deliberately infrequent -- a measured failure mode: the default '
+                                        '4h cap closed a live application session mid-review.')
 
     worker_send_cmd = sub.add_parser('worker-send', help='Send ONE command to an already-running worker-start '
                                       'process and print its result. Commands: inspect (read-only), read_fields '
@@ -2068,8 +2074,12 @@ def main():
             result['combobox_options'] = inspect_combobox_options(args.url, queries, headless=not args.headed)
     elif args.command == 'worker-start':
         try:
+            # 0 disables the idle crash-guard entirely (float('inf') is never reached
+            # by the integer idle counter), for supervised sessions where long human
+            # pauses are expected and normal.
+            idle_cap = args.idle_cap_seconds if args.idle_cap_seconds > 0 else float('inf')
             result = run_worker(args.run_key, args.profile, start_url=args.url, headless=not args.headed,
-                                 answer_bank_path=args.answer_bank)
+                                 answer_bank_path=args.answer_bank, idle_safety_cap_seconds=idle_cap)
         except RunLockedError as e:
             result = {'run_key': args.run_key, 'status': 'refused_locked', 'issues': [str(e)]}
     elif args.command == 'worker-send':

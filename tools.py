@@ -40,7 +40,12 @@ POSTINGS_DIR = Path('private/postings_drafts')
 # every turn -- context hygiene, and it makes the agent's reasoning legible
 # ("it asked for work_authorization before judging sponsorship").
 PROFILE_SECTIONS = {
-    'identity': ['name', 'full_name', 'location', 'email', 'phone', 'linkedin_url', 'positioning'],
+    # first/last/legal name parts were previously missing here, so the model saw
+    # only "name" and "full_name" and could not tell whether the surname was
+    # "Lancheros" or "Lancheros Ulloa" on a legal-name field. The profile had
+    # already resolved this; the section mapping was simply hiding it.
+    'identity': ['name', 'full_name', 'first_name', 'last_name', 'legal_name_parts',
+                 'name_field_guidance', 'location', 'email', 'phone', 'linkedin_url', 'positioning'],
     'education': ['education', 'resume_education_entries', 'expected_graduation',
                   'expected_graduation_status', 'education_historical'],
     'employment': ['resume_employment_entries', 'technical_experience', 'background'],

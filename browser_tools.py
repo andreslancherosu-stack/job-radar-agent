@@ -191,6 +191,36 @@ def fill_application_fields(run_key, steps):
     }
 
 
+def answer_dropdown_question(run_key, question_label, option_label):
+    """Answer an ARIA combobox question (the Greenhouse 'dropdown' pattern).
+
+    A real, measured failure: these render as role="combobox" with a text
+    input, so a plain fill() reports success and commits NOTHING. Verified on
+    this live Greenhouse form -- 17 of its questions are comboboxes, and the
+    sponsorship answer silently did not stick. Routes to apply.py's
+    select_combobox, which clicks the trigger, picks the option by its visible
+    text, and re-reads the committed selection.
+    """
+    if not isinstance(question_label, str) or not question_label.strip():
+        raise ValueError('question_label must be the question\'s full visible text')
+    if not isinstance(option_label, str) or not option_label.strip():
+        raise ValueError('option_label must be the exact option text to select')
+    err = _guard(run_key, needs_write=True)
+    if err:
+        raise ValueError(err)
+    result, failed = _send(run_key, {'cmd': 'fill_steps', 'steps': [
+        {'action': 'select_combobox', 'label': question_label, 'value': option_label}]})
+    if failed:
+        return result
+    verification = result.get('verification', [])
+    ok = bool(verification) and all(v.get('ok') for v in verification)
+    return {
+        'answered': ok, 'verification': verification,
+        'rule': ('answered=false means the option is NOT committed. An option merely visible in an '
+                 'open menu is not a selected answer. Re-read before trusting it.'),
+    }
+
+
 def upload_document(run_key, selector, file_path, label='Upload'):
     """Attach a document and verify the attachment actually completed."""
     if not Path(file_path).exists():
@@ -278,6 +308,16 @@ TOOL_DEFINITIONS = [
              'value': {'description': 'Value to enter, option label to select, or boolean to check.'}},
              'required': ['action', 'selector', 'value']}}},
          'required': ['run_key', 'steps']}},
+    {'name': 'answer_dropdown_question',
+     'description': 'Answer a DROPDOWN/combobox question by selecting an option, and verify the '
+                    'selection actually committed. Use this (not fill_application_fields) for any '
+                    'question rendered as a combobox -- a plain fill reports success but commits '
+                    'nothing on these widgets.',
+     'input_schema': {'type': 'object', 'properties': {
+         'run_key': _RUN_KEY,
+         'question_label': {'type': 'string', 'description': "The question's full visible text."},
+         'option_label': {'type': 'string', 'description': 'Exact option text to select, e.g. "Yes".'}},
+         'required': ['run_key', 'question_label', 'option_label']}},
     {'name': 'upload_document',
      'description': 'Attach a document to a specific upload widget and verify the attachment completed.',
      'input_schema': {'type': 'object', 'properties': {
@@ -299,6 +339,7 @@ TOOL_REGISTRY = {
     'inspect_application_page': inspect_application_page,
     'read_application_fields': read_application_fields,
     'fill_application_fields': fill_application_fields,
+    'answer_dropdown_question': answer_dropdown_question,
     'upload_document': upload_document,
     'advance_to_next_page': advance_to_next_page,
 }
