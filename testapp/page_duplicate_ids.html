@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Repeatable Blocks With Duplicate IDs (Avature-bug reproduction)</title>
+</head>
+<body>
+<p>
+  Reproduces the real bug found on Bain's Avature application form: dynamically
+  cloned "add another" blocks reuse the SAME input id/name across different
+  blocks. Page-wide label-proximity or id-based targeting can silently grab
+  the wrong block's field. Container-scoped targeting must not.
+</p>
+
+<div id="work-history">
+  <h2>Work history</h2>
+
+  <div class="entry-block">
+    <label for="company-sample">Company *</label>
+    <input id="company-sample" name="company-sample" type="text" value="Cherry Coatings">
+    <label for="title-sample">Title *</label>
+    <input id="title-sample" name="title-sample" type="text" value="AI &amp; Copilot Architecture Intern">
+    <a href="#" class="remove-link">remove</a>
+  </div>
+
+  <div class="entry-block">
+    <label for="company-sample">Company *</label>
+    <input id="company-sample" name="company-sample" type="text" value="Alu Inmobiliaria">
+    <label for="title-sample">Title *</label>
+    <input id="title-sample" name="title-sample" type="text" value="Founder &amp; Broker">
+    <a href="#" class="remove-link">remove</a>
+  </div>
+
+  <div class="entry-block">
+    <label for="company-sample">Company *</label>
+    <input id="company-sample" name="company-sample" type="text" value="Universidad Pontificia Bolivariana">
+    <label for="title-sample">Title *</label>
+    <input id="title-sample" name="title-sample" type="text" value="(HR turnover and healthcare strategy), enabling real-world application of project management">
+    <a href="#" class="remove-link">remove</a>
+  </div>
+
+  <div class="entry-block">
+    <label for="company-sample">Company *</label>
+    <input id="company-sample" name="company-sample" type="text" value="">
+    <label for="title-sample">Title *</label>
+    <input id="title-sample" name="title-sample" type="text" value="">
+    <a href="#" class="remove-link">remove</a>
+  </div>
+</div>
+
+<div id="education-history">
+  <h2>Education history</h2>
+
+  <div class="entry-block">
+    <label for="major-sample">Major *</label>
+    <input id="major-sample" name="major-sample" type="text" value="Business Analytics and AI">
+    <a href="#" class="remove-link">remove</a>
+  </div>
+
+  <div class="entry-block">
+    <label for="major-sample">Major *</label>
+    <input id="major-sample" name="major-sample" type="text" value="Industrial Engineering">
+    <a href="#" class="remove-link">remove</a>
+  </div>
+</div>
+</body>
+</html>

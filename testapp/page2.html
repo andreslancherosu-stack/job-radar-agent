@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Education and Employment</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Fictional Company Careers - Business Intelligence Intern</h1>
+<p class="progress">Step 2 of 4: Education and Employment</p>
+
+<h2>Education</h2>
+<div id="education-container"></div>
+<button type="button" id="add-education-btn">Add Another Education</button>
+<div class="error" id="education_error"></div>
+
+<h2>Employment</h2>
+<div id="employment-container"></div>
+<button type="button" id="add-employment-btn">Add Another Employment</button>
+<div class="error" id="employment_error"></div>
+
+<div>
+  <button type="button" id="back-btn">Back</button>
+  <button type="button" id="next-btn">Next</button>
+</div>
+
+<script src="app.js"></script>
+<script>
+  const eduContainer = document.getElementById('education-container');
+  const empContainer = document.getElementById('employment-container');
+
+  function educationRowHtml(i) {
+    const n = i + 1;
+    return `
+      <div class="entry-block" data-index="${i}">
+        <div class="field">
+          <label for="edu_school_${i}">School Name (Entry ${n})</label>
+          <input type="text" id="edu_school_${i}" name="edu_school_${i}">
+        </div>
+        <div class="field">
+          <label for="edu_degree_${i}">Degree (Entry ${n})</label>
+          <input type="text" id="edu_degree_${i}" name="edu_degree_${i}">
+        </div>
+        <div class="field">
+          <label for="edu_field_${i}">Field of Study (Entry ${n})</label>
+          <input type="text" id="edu_field_${i}" name="edu_field_${i}">
+        </div>
+        <div class="field">
+          <label for="edu_grad_date_${i}">Graduation Date (Entry ${n})</label>
+          <input type="month" id="edu_grad_date_${i}" name="edu_grad_date_${i}">
+        </div>
+      </div>`;
+  }
+
+  function employmentRowHtml(i) {
+    const n = i + 1;
+    return `
+      <div class="entry-block" data-index="${i}">
+        <div class="field">
+          <label for="emp_company_${i}">Company Name (Entry ${n})</label>
+          <input type="text" id="emp_company_${i}" name="emp_company_${i}">
+        </div>
+        <div class="field">
+          <label for="emp_title_${i}">Job Title (Entry ${n})</label>
+          <input type="text" id="emp_title_${i}" name="emp_title_${i}">
+        </div>
+        <div class="field">
+          <label for="emp_start_date_${i}">Start Date (Entry ${n})</label>
+          <input type="month" id="emp_start_date_${i}" name="emp_start_date_${i}">
+        </div>
+        <div class="field">
+          <label for="emp_end_date_${i}">End Date (Entry ${n}) - leave blank if current</label>
+          <input type="month" id="emp_end_date_${i}" name="emp_end_date_${i}">
+        </div>
+        <div class="field">
+          <label for="emp_description_${i}">Description (Entry ${n})</label>
+          <textarea id="emp_description_${i}" name="emp_description_${i}"></textarea>
+        </div>
+      </div>`;
+  }
+
+  function addEducationRow(values) {
+    const i = eduContainer.children.length;
+    eduContainer.insertAdjacentHTML('beforeend', educationRowHtml(i));
+    if (values) {
+      document.getElementById('edu_school_' + i).value = values.school || '';
+      document.getElementById('edu_degree_' + i).value = values.degree || '';
+      document.getElementById('edu_field_' + i).value = values.field || '';
+      document.getElementById('edu_grad_date_' + i).value = values.grad_date || '';
+    }
+  }
+
+  function addEmploymentRow(values) {
+    const i = empContainer.children.length;
+    empContainer.insertAdjacentHTML('beforeend', employmentRowHtml(i));
+    if (values) {
+      document.getElementById('emp_company_' + i).value = values.company || '';
+      document.getElementById('emp_title_' + i).value = values.title || '';
+      document.getElementById('emp_start_date_' + i).value = values.start_date || '';
+      document.getElementById('emp_end_date_' + i).value = values.end_date || '';
+      document.getElementById('emp_description_' + i).value = values.description || '';
+    }
+  }
+
+  const saved = loadData();
+  if (saved.education && saved.education.length) {
+    saved.education.forEach(addEducationRow);
+  } else {
+    addEducationRow();
+  }
+  if (saved.employment && saved.employment.length) {
+    saved.employment.forEach(addEmploymentRow);
+  } else {
+    addEmploymentRow();
+  }
+
+  document.getElementById('add-education-btn').addEventListener('click', () => addEducationRow());
+  document.getElementById('add-employment-btn').addEventListener('click', () => addEmploymentRow());
+
+  document.getElementById('back-btn').addEventListener('click', () => {
+    window.location.href = 'page1.html';
+  });
+
+  document.getElementById('next-btn').addEventListener('click', function () {
+    clearAllErrors();
+    let ok = true;
+
+    const education = [];
+    Array.from(eduContainer.children).forEach((block) => {
+      const i = block.dataset.index;
+      const row = {
+        school: document.getElementById('edu_school_' + i).value.trim(),
+        degree: document.getElementById('edu_degree_' + i).value.trim(),
+        field: document.getElementById('edu_field_' + i).value.trim(),
+        grad_date: document.getElementById('edu_grad_date_' + i).value.trim()
+      };
+      if (row.school || row.degree || row.field || row.grad_date) education.push(row);
+    });
+    const educationComplete = education.some((r) => r.school && r.degree && r.field && r.grad_date);
+    if (!educationComplete) {
+      showError('education', 'Add at least one complete education entry.');
+      ok = false;
+    }
+
+    const employment = [];
+    Array.from(empContainer.children).forEach((block) => {
+      const i = block.dataset.index;
+      const row = {
+        company: document.getElementById('emp_company_' + i).value.trim(),
+        title: document.getElementById('emp_title_' + i).value.trim(),
+        start_date: document.getElementById('emp_start_date_' + i).value.trim(),
+        end_date: document.getElementById('emp_end_date_' + i).value.trim(),
+        description: document.getElementById('emp_description_' + i).value.trim()
+      };
+      if (row.company || row.title || row.start_date || row.end_date || row.description) employment.push(row);
+    });
+    const employmentComplete = employment.some((r) => r.company && r.title && r.start_date);
+    if (!employmentComplete) {
+      showError('employment', 'Add at least one complete employment entry.');
+      ok = false;
+    }
+
+    if (!ok) return;
+
+    saveData({ education, employment });
+    window.location.href = 'page3.html';
+  });
+</script>
+</body>
+</html>

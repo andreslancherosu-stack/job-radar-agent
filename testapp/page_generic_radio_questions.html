@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Screening Questions</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Fictional Company Careers - Screening Questions</h1>
+<p class="progress">
+  Models a real, measured problem: multiple yes/no questions whose radio
+  groups use generic, non-descriptive internal names (MultipleChoiceResponse0,
+  MultipleChoiceResponse1, ...) and IDENTICAL "Yes"/"No" option labels across
+  every question -- a page-wide label search or a positional/index-based
+  guess cannot safely tell these apart. Used to test that a question is
+  targeted by its own real text instead.
+</p>
+
+<div class="field" id="q-work-auth">
+  <label>Are you eligible to work in the U.S.?</label>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse0" value="yes"> Yes</label></div>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse0" value="no"> No</label></div>
+</div>
+
+<div class="field" id="q-eighteen">
+  <label>Are you at least 18 years or older?</label>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse1" value="yes"> Yes</label></div>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse1" value="no"> No</label></div>
+</div>
+
+<div class="field" id="q-prior-employment">
+  <label>Have you been previously employed with this company?</label>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse4" value="yes"> Yes</label></div>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse4" value="no"> No</label></div>
+</div>
+
+<div class="field" id="q-relatives">
+  <label>Do you have any relatives employed by this company?</label>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse5" value="yes"> Yes</label></div>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse5" value="no"> No</label></div>
+</div>
+
+<div class="field" id="q-education-level">
+  <label>Highest level of education</label>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse12" value="hs"> High School Diploma/GED</label></div>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse12" value="bachelors"> Bachelor's Degree</label></div>
+  <div class="radio-row"><label style="font-weight:normal;"><input type="radio" name="MultipleChoiceResponse12" value="masters"> Master's Degree</label></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

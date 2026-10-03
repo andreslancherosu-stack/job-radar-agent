@@ -1,0 +1,21 @@
+{
+  "_note": "Fictional plan proving select_combobox, stop_after_fill, and the selector override for ambiguously-labeled fields, all against testapp/page_single_form.html. Not a real application.",
+  "approved": true,
+  "start_url": "http://localhost:8765/page_single_form.html",
+  "pages": [
+    {
+      "name": "Single page application",
+      "stop_after_fill": true,
+      "steps": [
+        {"action": "fill", "label": "Full Name", "value": "profile:full_name"},
+        {"action": "upload", "label": "Attach", "selector": "#resume_upload", "value": "profile:resume_file_path"},
+        {
+          "action": "select_combobox",
+          "label": "Will you now, or in the future, require sponsorship to legally work in the U.S.?",
+          "value": "profile:sponsor_answer"
+        },
+        {"action": "check", "label": "I certify that the information provided in this application is true and accurate.", "value": "profile:certify_true"}
+      ]
+    }
+  ]
+}

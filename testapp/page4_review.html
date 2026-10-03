@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Review and Submit</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Fictional Company Careers - Business Intelligence Intern</h1>
+<p class="progress">Step 4 of 4: Review and Submit</p>
+
+<div id="submitted-banner" class="banner" style="display:none;">
+  Test application submitted. (This is a local fixture; no real employer received anything.)
+</div>
+
+<dl class="review-section" id="review-output"></dl>
+
+<div>
+  <button type="button" id="back-btn">Back</button>
+  <button type="button" id="submit-application-btn">Submit Application</button>
+</div>
+
+<script src="app.js"></script>
+<script>
+  const data = loadData();
+
+  function row(dt, dd) {
+    return `<dt>${dt}</dt><dd>${dd === undefined || dd === '' || dd === null ? '(blank)' : dd}</dd>`;
+  }
+
+  let html = '';
+  html += '<h2>Personal Information</h2>';
+  html += row('Full Name', data.full_name);
+  html += row('Email', data.email);
+  html += row('Phone', data.phone);
+  html += row('LinkedIn', data.linkedin_url);
+  html += row('Address', `${data.street_address || ''}, ${data.city || ''}, ${data.state || ''} ${data.zip_code || ''}`);
+  html += row('Willing to relocate', data.willing_to_relocate ? 'Yes' : 'No');
+
+  html += '<h2>Education</h2>';
+  (data.education || []).forEach((e, i) => {
+    html += row(`Entry ${i + 1}`, `${e.degree} in ${e.field}, ${e.school} (${e.grad_date})`);
+  });
+
+  html += '<h2>Employment</h2>';
+  (data.employment || []).forEach((e, i) => {
+    html += row(`Entry ${i + 1}`, `${e.title} at ${e.company} (${e.start_date} - ${e.end_date || 'present'})`);
+  });
+
+  html += '<h2>Screening</h2>';
+  html += row('Work authorized in US', data.work_auth);
+  if (data.work_auth === 'no') {
+    html += row('Sponsorship explanation', data.sponsorship_explanation);
+  }
+  const skills = ['skill_python','skill_sql','skill_powerbi','skill_excel','skill_communication']
+    .filter((k) => data[k]).map((k) => k.replace('skill_', ''));
+  html += row('Skills selected', skills.join(', '));
+  html += row('Resume file', data.resume_file_name);
+  html += row('Cover letter file', data.cover_letter_file_name);
+  html += row('Certified information accurate', data.certify_true ? 'Yes' : 'No');
+  html += row('Marketing emails opt-in', data.marketing_emails ? 'Yes' : 'No');
+
+  document.getElementById('review-output').innerHTML = html;
+
+  if (data.submitted) {
+    document.getElementById('submitted-banner').style.display = 'block';
+    document.getElementById('submit-application-btn').disabled = true;
+    document.getElementById('submit-application-btn').textContent = 'Submitted';
+  }
+
+  document.getElementById('back-btn').addEventListener('click', () => {
+    window.location.href = 'page3.html';
+  });
+
+  document.getElementById('submit-application-btn').addEventListener('click', function () {
+    saveData({ submitted: true });
+    document.getElementById('submitted-banner').style.display = 'block';
+    this.disabled = true;
+    this.textContent = 'Submitted';
+  });
+</script>
+</body>
+</html>

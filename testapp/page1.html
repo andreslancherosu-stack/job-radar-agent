@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Personal Information</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Fictional Company Careers - Business Intelligence Intern</h1>
+<p class="progress">Step 1 of 4: Personal Information</p>
+
+<form id="page1-form" novalidate>
+  <div class="field">
+    <label for="full_name">Full Name</label>
+    <input type="text" id="full_name" name="full_name">
+    <div class="error" id="full_name_error"></div>
+  </div>
+
+  <div class="field">
+    <label for="email">Email Address</label>
+    <input type="email" id="email" name="email">
+    <div class="error" id="email_error"></div>
+  </div>
+
+  <div class="field">
+    <label for="phone">Phone Number</label>
+    <input type="tel" id="phone" name="phone">
+    <div class="error" id="phone_error"></div>
+  </div>
+
+  <div class="field">
+    <label for="linkedin_url">LinkedIn Profile URL</label>
+    <input type="text" id="linkedin_url" name="linkedin_url">
+    <div class="error" id="linkedin_url_error"></div>
+  </div>
+
+  <div class="field">
+    <label for="street_address">Street Address</label>
+    <input type="text" id="street_address" name="street_address">
+    <div class="error" id="street_address_error"></div>
+  </div>
+
+  <div class="field">
+    <label for="city">City</label>
+    <input type="text" id="city" name="city">
+    <div class="error" id="city_error"></div>
+  </div>
+
+  <div class="field">
+    <label for="state">State</label>
+    <select id="state" name="state">
+      <option value="">Select a state</option>
+      <option value="TX">Texas</option>
+      <option value="CA">California</option>
+      <option value="NY">New York</option>
+      <option value="OTHER">Other</option>
+    </select>
+    <div class="error" id="state_error"></div>
+  </div>
+
+  <div class="field">
+    <label for="zip_code">ZIP Code</label>
+    <input type="text" id="zip_code" name="zip_code" maxlength="5">
+    <div class="error" id="zip_code_error"></div>
+  </div>
+
+  <div class="field checkbox-row">
+    <label style="font-weight:normal;">
+      <input type="checkbox" id="willing_to_relocate" name="willing_to_relocate">
+      I am willing to relocate
+    </label>
+  </div>
+
+  <button type="button" id="next-btn">Next</button>
+</form>
+
+<script src="app.js"></script>
+<script>
+  ['full_name','email','phone','linkedin_url','street_address','city','state','zip_code'].forEach(restoreField);
+  restoreField('willing_to_relocate');
+
+  document.getElementById('next-btn').addEventListener('click', function () {
+    clearAllErrors();
+    let ok = true;
+
+    const required = ['full_name','email','phone','street_address','city','state','zip_code'];
+    required.forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el.value || !el.value.trim()) {
+        showError(id, 'This field is required.');
+        ok = false;
+      }
+    });
+
+    const email = document.getElementById('email');
+    if (email.value && !isValidEmail(email.value)) {
+      showError('email', 'Enter a valid email address.');
+      ok = false;
+    }
+
+    const zip = document.getElementById('zip_code');
+    if (zip.value && !/^\d{5}$/.test(zip.value)) {
+      showError('zip_code', 'ZIP code must be 5 digits.');
+      ok = false;
+    }
+
+    if (!ok) return;
+
+    saveData({
+      full_name: document.getElementById('full_name').value,
+      email: document.getElementById('email').value,
+      phone: document.getElementById('phone').value,
+      linkedin_url: document.getElementById('linkedin_url').value,
+      street_address: document.getElementById('street_address').value,
+      city: document.getElementById('city').value,
+      state: document.getElementById('state').value,
+      zip_code: document.getElementById('zip_code').value,
+      willing_to_relocate: document.getElementById('willing_to_relocate').checked
+    });
+    window.location.href = 'page2.html';
+  });
+</script>
+</body>
+</html>

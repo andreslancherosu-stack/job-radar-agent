@@ -1,0 +1,16 @@
+{
+  "_note": "Fictional plan testing select_combobox type-ahead support and bounded retry-and-continue, against testapp/page_typeahead_form.html.",
+  "approved": true,
+  "start_url": "http://localhost:8765/page_typeahead_form.html",
+  "pages": [
+    {
+      "name": "Type-ahead test",
+      "stop_after_fill": true,
+      "steps": [
+        {"action": "select_combobox", "label": "School", "value": "profile:school"},
+        {"action": "fill", "label": "This Field Does Not Exist", "value": "profile:full_name"},
+        {"action": "fill", "label": "Full Name", "value": "profile:full_name"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "_note": "Fully fictional profile used only to test apply.py against testapp/. Not Andres's real data.",
+  "full_name": "Taylor Example",
+  "email": "taylor.example@example.invalid",
+  "phone": "555-010-1234",
+  "linkedin_url": "https://www.linkedin.com/in/example-invalid",
+  "street_address": "100 Fictional Way",
+  "city": "Plano",
+  "state": "TX",
+  "zip_code": "75024",
+  "willing_to_relocate": true,
+  "education": [
+    {
+      "school": "Fictional State University",
+      "degree": "MS Business Analytics",
+      "field": "Business Analytics",
+      "grad_date": "2026-05"
+    }
+  ],
+  "employment": [
+    {
+      "company": "Example Test Co",
+      "title": "Operations Analyst",
+      "start_date": "2023-06",
+      "end_date": "",
+      "description": "Fictional entry used only for automation testing."
+    }
+  ],
+  "work_auth": "yes",
+  "skills": {
+    "python": true,
+    "sql": true,
+    "powerbi": true,
+    "excel": false,
+    "communication": true
+  },
+  "resume_file_path": "demo/fixtures/test_resume.pdf",
+  "certify_true": false
+}

@@ -1,0 +1,12 @@
+{
+  "source_kind": "demo",
+  "source_url": "https://example.invalid/01",
+  "open": true,
+  "verified_on": "2026-09-09",
+  "deadline": null,
+  "human_verified": false,
+  "company": "Example Construction",
+  "role": "Business Intelligence Intern",
+  "job_id": "DEMO-01",
+  "text": "Graduate students accepted. Python and Power BI required. Operations experience is preferred; no full-time analytics experience required. International students with valid internship authorization are accepted."
+}

@@ -1,0 +1,63 @@
+{
+  "_note": "Fictional plan for testapp/, used to validate apply.py end to end. approved must be set true by a human after reviewing the proposed answers below.",
+  "approved": true,
+  "start_url": "http://localhost:8765/page1.html",
+  "pages": [
+    {
+      "name": "Personal Information",
+      "next_button_label": "Next",
+      "steps": [
+        {"action": "fill", "label": "Full Name", "value": "profile:full_name"},
+        {"action": "fill", "label": "Email Address", "value": "profile:email"},
+        {"action": "fill", "label": "Phone Number", "value": "profile:phone", "format_normalization": "phone"},
+        {"action": "fill", "label": "LinkedIn Profile URL", "value": "profile:linkedin_url"},
+        {"action": "fill", "label": "Street Address", "value": "profile:street_address"},
+        {"action": "fill", "label": "City", "value": "profile:city"},
+        {"action": "select", "label": "State", "value": "profile:state"},
+        {"action": "fill", "label": "ZIP Code", "value": "profile:zip_code"},
+        {"action": "check", "label": "I am willing to relocate", "value": "profile:willing_to_relocate"}
+      ]
+    },
+    {
+      "name": "Education and Employment",
+      "next_button_label": "Next",
+      "steps": [
+        {"action": "fill", "label": "School Name (Entry 1)", "value": "profile:education.0.school"},
+        {"action": "fill", "label": "Degree (Entry 1)", "value": "profile:education.0.degree"},
+        {"action": "fill", "label": "Field of Study (Entry 1)", "value": "profile:education.0.field"},
+        {"action": "fill", "label": "Graduation Date (Entry 1)", "value": "profile:education.0.grad_date"},
+        {"action": "fill", "label": "Company Name (Entry 1)", "value": "profile:employment.0.company"},
+        {"action": "fill", "label": "Job Title (Entry 1)", "value": "profile:employment.0.title"},
+        {"action": "fill", "label": "Start Date (Entry 1)", "value": "profile:employment.0.start_date"},
+        {"action": "fill", "label": "Description (Entry 1)", "value": "profile:employment.0.description"}
+      ]
+    },
+    {
+      "name": "Screening and Documents",
+      "next_button_label": "Review Application",
+      "steps": [
+        {
+          "action": "select_radio",
+          "question": "Are you legally authorized to work in the United States?",
+          "value": "profile:work_auth",
+          "options": {
+            "yes": "Yes, I am authorized to work in the United States",
+            "no": "No, I am not authorized to work in the United States"
+          }
+        },
+        {"action": "check", "label": "Python", "value": "profile:skills.python"},
+        {"action": "check", "label": "SQL", "value": "profile:skills.sql"},
+        {"action": "check", "label": "Power BI", "value": "profile:skills.powerbi"},
+        {"action": "check", "label": "Excel", "value": "profile:skills.excel"},
+        {"action": "check", "label": "Communication", "value": "profile:skills.communication"},
+        {"action": "upload", "label": "Resume (PDF or DOCX)", "value": "profile:resume_file_path"},
+        {"action": "check", "label": "I certify that the information provided in this application is true and accurate.", "value": "profile:certify_true"}
+      ]
+    },
+    {
+      "name": "Review and Submit",
+      "is_review_page": true,
+      "steps": []
+    }
+  ]
+}

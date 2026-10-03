@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Click-Initialized Upload Widget</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Fictional Company Careers - Upload Widget Test</h1>
+<p class="progress">
+  Models a real Greenhouse-style Resume/CV widget: the hidden native file
+  input only works correctly if the visible "Attach" button was clicked
+  first (arming it). A direct set_input_files() on the raw input, bypassing
+  that click, reproduces the real bug: the widget renders a JS error and
+  never shows the filename — used to test that verification correctly
+  reports this as FAILED, not as a false success.
+</p>
+
+<p>Resume/CV</p>
+<div class="file-upload__wrapper" id="resume_wrapper">
+  <button type="button" id="resume_attach_btn" class="btn">Attach</button>
+  <label class="visually-hidden" for="resume_upload">Attach</label>
+  <input type="file" id="resume_upload" class="visually-hidden">
+</div>
+
+<script src="app.js"></script>
+<script>
+  let armed = false;
+  document.getElementById('resume_attach_btn').addEventListener('click', function () {
+    armed = true;
+    document.getElementById('resume_upload').click();
+  });
+  document.getElementById('resume_upload').addEventListener('change', function (e) {
+    const wrapper = document.getElementById('resume_wrapper');
+    if (!armed) {
+      // Reproduces the real widget's failure mode when its internal
+      // click-armed initialization is bypassed.
+      wrapper.innerHTML = '<p class="error visible">Cannot read properties of undefined (reading \'uploadFile\')</p>';
+      return;
+    }
+    const name = e.target.files.length ? e.target.files[0].name : '';
+    wrapper.innerHTML = '<p class="file-upload__filename">' + name + '</p>' +
+      '<button type="button" aria-label="Remove file">Remove</button>';
+    armed = false;
+  });
+</script>
+</body>
+</html>

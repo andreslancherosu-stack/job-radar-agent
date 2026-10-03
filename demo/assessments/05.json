@@ -1,0 +1,24 @@
+{
+  "fit": "GOOD FIT",
+  "next_action": "Review this fictional scenario; never apply to demo roles.",
+  "experience": {
+    "status": "pass",
+    "quote": "No full-time analytics experience required.",
+    "reason": "Fixture comparison: an internship supports junior skills, not five years of professional data science."
+  },
+  "education": {
+    "status": "fail",
+    "quote": "Current undergraduate students only.",
+    "reason": "Fixture profile is a graduate student, not a current undergraduate."
+  },
+  "work_authorization": {
+    "status": "pass",
+    "quote": "International students with valid internship authorization are accepted.",
+    "reason": "Synthetic test assumes the fictional candidate has valid authorization. Real profile authorization remains unverified."
+  },
+  "career_fit": {
+    "status": "pass",
+    "quote": "Python and Power BI required.",
+    "reason": "Analytics-related responsibilities; specialized seniority is evaluated separately."
+  }
+}

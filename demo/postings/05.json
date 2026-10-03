@@ -1,0 +1,12 @@
+{
+  "source_kind": "demo",
+  "source_url": "https://example.invalid/05",
+  "open": true,
+  "verified_on": "2026-09-09",
+  "deadline": null,
+  "human_verified": false,
+  "company": "Example Campus",
+  "role": "Operations Intern",
+  "job_id": "DEMO-05",
+  "text": "Current undergraduate students only. Python and Power BI required. No full-time analytics experience required. International students with valid internship authorization are accepted."
+}

@@ -1,0 +1,9 @@
+private/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.venv/
+demo/state.json
+demo/jobs.csv

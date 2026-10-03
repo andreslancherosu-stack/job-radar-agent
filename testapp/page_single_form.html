@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Single-Page Form With Custom Dropdown</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .combobox-wrap { position: relative; }
+  .combobox-trigger { width: 100%; padding: 6px; border: 1px solid #999; background: white; cursor: pointer; text-align: left; }
+  .listbox { position: absolute; left: 0; right: 0; border: 1px solid #999; background: white; z-index: 10; list-style: none; margin: 0; padding: 0; }
+  .listbox[hidden] { display: none; }
+  .listbox li { padding: 6px; cursor: pointer; }
+  .listbox li:hover, .listbox li:focus { background: #eef; }
+</style>
+</head>
+<body>
+<h1>Fictional Company Careers - Single-Page Application (Greenhouse-style)</h1>
+<p class="progress">This entire application is one page, like many real ATS embeds. There is no "Next" button — only fields, then Submit.</p>
+
+<div class="field">
+  <label for="full_name">Full Name</label>
+  <input type="text" id="full_name" name="full_name">
+  <div class="error" id="full_name_error"></div>
+</div>
+
+
+<!--
+  Two upload fields deliberately sharing the SAME accessible label text
+  ("Attach"), reproducing the real Momentum/Greenhouse application page's
+  resume vs. cover-letter fields: get_by_label('Attach', exact=True) is
+  genuinely ambiguous there. Distinct only by id, exactly like the real page.
+-->
+<p>Resume/CV</p>
+<div class="field">
+  <label for="resume_upload">Attach</label>
+  <input type="file" id="resume_upload" name="resume_upload">
+  <span id="resume_upload_name"></span>
+  <div class="error" id="resume_upload_error"></div>
+</div>
+<p>Cover Letter</p>
+<div class="field">
+  <label for="cover_letter_upload">Attach</label>
+  <input type="file" id="cover_letter_upload" name="cover_letter_upload">
+</div>
+
+<!--
+  A custom combobox mimicking Greenhouse-style screening questions: a
+  clickable trigger with role="combobox" (not a native <select>), opening a
+  role="listbox" of role="option" items. A hidden native input mirrors the
+  chosen value for validation, the same progressive-enhancement pattern real
+  ATS platforms commonly use.
+-->
+<div class="field">
+  <label id="sponsor_label" for="sponsor_trigger">Will you now, or in the future, require sponsorship to legally work in the U.S.?</label>
+  <div class="combobox-wrap">
+    <button type="button" id="sponsor_trigger" class="combobox-trigger" role="combobox"
+            aria-haspopup="listbox" aria-expanded="false" aria-labelledby="sponsor_label"
+            aria-controls="sponsor_listbox">Select...</button>
+    <ul class="listbox" id="sponsor_listbox" role="listbox" hidden aria-labelledby="sponsor_label">
+      <li role="option" tabindex="-1">Yes</li>
+      <li role="option" tabindex="-1">No</li>
+    </ul>
+  </div>
+  <input type="hidden" id="sponsor_value" name="sponsor_value">
+  <div class="error" id="sponsor_trigger_error"></div>
+</div>
+
+<div class="field checkbox-row">
+  <label style="font-weight:normal;">
+    <input type="checkbox" id="certify_true" name="certify_true">
+    I certify that the information provided in this application is true and accurate.
+  </label>
+  <div class="error" id="certify_true_error"></div>
+</div>
+
+<div>
+  <button type="submit" id="submit-application-btn">Submit application</button>
+</div>
+
+<script src="app.js"></script>
+<script>
+  restoreField('full_name');
+  restoreField('sponsor_value');
+  restoreField('certify_true');
+  const saved = loadData();
+  if (saved.sponsor_value) {
+    document.getElementById('sponsor_trigger').textContent = saved.sponsor_value;
+  }
+  if (saved.resume_file_name) {
+    document.getElementById('resume_upload_name').textContent = saved.resume_file_name;
+  }
+
+  // Autosave on change (not just on submit) so a run's actual field state
+  // can be verified from a fresh page load afterward, without needing to
+  // keep the exact same in-memory page instance alive — this fixture's
+  // "submitted" flag is still set ONLY by the submit handler below.
+  function autosave(patch) { saveData(Object.assign({}, loadData(), patch)); }
+  document.getElementById('full_name').addEventListener('input', (e) => autosave({ full_name: e.target.value }));
+  document.getElementById('certify_true').addEventListener('change', (e) => autosave({ certify_true: e.target.checked }));
+  document.getElementById('resume_upload').addEventListener('change', (e) => {
+    autosave({ resume_file_name: e.target.files.length ? e.target.files[0].name : '' });
+    document.getElementById('resume_upload_name').textContent = e.target.files.length ? e.target.files[0].name : '';
+  });
+
+  const trigger = document.getElementById('sponsor_trigger');
+  const listbox = document.getElementById('sponsor_listbox');
+  trigger.addEventListener('click', function () {
+    const willOpen = listbox.hidden;
+    listbox.hidden = !willOpen;
+    trigger.setAttribute('aria-expanded', String(willOpen));
+  });
+  listbox.querySelectorAll('li[role="option"]').forEach((opt) => {
+    opt.addEventListener('click', function () {
+      trigger.textContent = opt.textContent;
+      document.getElementById('sponsor_value').value = opt.textContent;
+      listbox.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      clearError('sponsor_trigger');
+      autosave({ sponsor_value: opt.textContent });
+    });
+  });
+
+  // Deliberately no "Next" handler and no JS submit handler beyond validation
+  // display: this fixture models a single page whose only button is Submit,
+  // which automation must never click. A native form submit would navigate
+  // away; validation runs on an explicit check instead so the page's own
+  // "no submission happened" state is easy to verify from outside.
+  document.getElementById('submit-application-btn').addEventListener('click', function (e) {
+    e.preventDefault();
+    clearAllErrors();
+    let ok = true;
+    if (!document.getElementById('full_name').value.trim()) { showError('full_name', 'This field is required.'); ok = false; }
+    if (!document.getElementById('resume_upload').files.length) { showError('resume_upload', 'Resume upload is required.'); ok = false; }
+    if (!document.getElementById('sponsor_value').value) { showError('sponsor_trigger', 'Select an option.'); ok = false; }
+    if (!document.getElementById('certify_true').checked) { showError('certify_true', 'You must certify the information is accurate.'); ok = false; }
+    if (!ok) return;
+    saveData({
+      full_name: document.getElementById('full_name').value,
+      sponsor_value: document.getElementById('sponsor_value').value,
+      certify_true: document.getElementById('certify_true').checked,
+      submitted: true
+    });
+    document.body.insertAdjacentHTML('afterbegin', '<div class="banner" id="submitted-banner">Test application submitted.</div>');
+    this.disabled = true;
+  });
+</script>
+</body>
+</html>

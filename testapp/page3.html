@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Screening and Documents</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Fictional Company Careers - Business Intelligence Intern</h1>
+<p class="progress">Step 3 of 4: Screening Questions and Documents</p>
+
+<fieldset class="field">
+  <legend>Are you legally authorized to work in the United States?</legend>
+  <div class="radio-row">
+    <label style="font-weight:normal;">
+      <input type="radio" name="work_auth" id="work_auth_yes" value="yes">
+      Yes, I am authorized to work in the United States
+    </label>
+  </div>
+  <div class="radio-row">
+    <label style="font-weight:normal;">
+      <input type="radio" name="work_auth" id="work_auth_no" value="no">
+      No, I am not authorized to work in the United States
+    </label>
+  </div>
+  <div class="error" id="work_auth_error"></div>
+</fieldset>
+
+<div class="field" id="sponsorship_block" style="display:none;">
+  <label for="sponsorship_explanation">Please explain your sponsorship needs</label>
+  <textarea id="sponsorship_explanation" name="sponsorship_explanation"></textarea>
+  <div class="error" id="sponsorship_explanation_error"></div>
+</div>
+
+<fieldset class="field">
+  <legend>Which of the following skills do you have? (optional)</legend>
+  <div class="checkbox-row"><label style="font-weight:normal;"><input type="checkbox" id="skill_python" name="skill_python"> Python</label></div>
+  <div class="checkbox-row"><label style="font-weight:normal;"><input type="checkbox" id="skill_sql" name="skill_sql"> SQL</label></div>
+  <div class="checkbox-row"><label style="font-weight:normal;"><input type="checkbox" id="skill_powerbi" name="skill_powerbi"> Power BI</label></div>
+  <div class="checkbox-row"><label style="font-weight:normal;"><input type="checkbox" id="skill_excel" name="skill_excel"> Excel</label></div>
+  <div class="checkbox-row"><label style="font-weight:normal;"><input type="checkbox" id="skill_communication" name="skill_communication"> Communication</label></div>
+</fieldset>
+
+<div class="field">
+  <label for="resume_upload">Resume (PDF or DOCX)</label>
+  <input type="file" id="resume_upload" name="resume_upload" accept=".pdf,.doc,.docx">
+  <p id="resume_upload_filename"></p>
+  <div class="error" id="resume_upload_error"></div>
+</div>
+
+<div class="field">
+  <label for="cover_letter_upload">Cover Letter (optional)</label>
+  <input type="file" id="cover_letter_upload" name="cover_letter_upload" accept=".pdf,.doc,.docx">
+  <p id="cover_letter_upload_filename"></p>
+</div>
+
+<div class="field checkbox-row">
+  <label style="font-weight:normal;">
+    <input type="checkbox" id="certify_true" name="certify_true">
+    I certify that the information provided in this application is true and accurate.
+  </label>
+  <div class="error" id="certify_true_error"></div>
+</div>
+
+<div class="field checkbox-row">
+  <label style="font-weight:normal;">
+    <input type="checkbox" id="marketing_emails" name="marketing_emails">
+    Send me marketing emails and job alerts (optional)
+  </label>
+</div>
+
+<div>
+  <button type="button" id="back-btn">Back</button>
+  <button type="button" id="next-btn">Review Application</button>
+</div>
+
+<script src="app.js"></script>
+<script>
+  restoreRadioGroup('work_auth');
+  restoreField('sponsorship_explanation');
+  ['skill_python','skill_sql','skill_powerbi','skill_excel','skill_communication','certify_true','marketing_emails']
+    .forEach(restoreField);
+
+  const savedDocs = loadData();
+  let resumeFileName = savedDocs.resume_file_name || '';
+  let coverLetterFileName = savedDocs.cover_letter_file_name || '';
+
+  function updateSponsorshipVisibility() {
+    const noSelected = document.getElementById('work_auth_no').checked;
+    document.getElementById('sponsorship_block').style.display = noSelected ? 'block' : 'none';
+  }
+  updateSponsorshipVisibility();
+  document.getElementById('work_auth_yes').addEventListener('change', updateSponsorshipVisibility);
+  document.getElementById('work_auth_no').addEventListener('change', updateSponsorshipVisibility);
+
+  document.getElementById('resume_upload').addEventListener('change', function (e) {
+    resumeFileName = e.target.files.length ? e.target.files[0].name : '';
+    document.getElementById('resume_upload_filename').textContent = resumeFileName ? 'Attached: ' + resumeFileName : '';
+  });
+  document.getElementById('cover_letter_upload').addEventListener('change', function (e) {
+    coverLetterFileName = e.target.files.length ? e.target.files[0].name : '';
+    document.getElementById('cover_letter_upload_filename').textContent = coverLetterFileName ? 'Attached: ' + coverLetterFileName : '';
+  });
+  if (resumeFileName) document.getElementById('resume_upload_filename').textContent = 'Attached: ' + resumeFileName;
+  if (coverLetterFileName) document.getElementById('cover_letter_upload_filename').textContent = 'Attached: ' + coverLetterFileName;
+
+  document.getElementById('back-btn').addEventListener('click', () => {
+    window.location.href = 'page2.html';
+  });
+
+  document.getElementById('next-btn').addEventListener('click', function () {
+    clearAllErrors();
+    let ok = true;
+
+    const workAuth = document.querySelector('input[name="work_auth"]:checked');
+    if (!workAuth) {
+      showError('work_auth', 'Select an option.');
+      ok = false;
+    }
+
+    if (workAuth && workAuth.value === 'no') {
+      const explanation = document.getElementById('sponsorship_explanation').value.trim();
+      if (!explanation) {
+        showError('sponsorship_explanation', 'This field is required when you selected No.');
+        ok = false;
+      }
+    }
+
+    if (!resumeFileName) {
+      showError('resume_upload', 'Resume upload is required.');
+      ok = false;
+    }
+
+    if (!document.getElementById('certify_true').checked) {
+      showError('certify_true', 'You must certify the information is accurate.');
+      ok = false;
+    }
+
+    if (!ok) return;
+
+    saveData({
+      work_auth: workAuth.value,
+      sponsorship_explanation: document.getElementById('sponsorship_explanation').value,
+      skill_python: document.getElementById('skill_python').checked,
+      skill_sql: document.getElementById('skill_sql').checked,
+      skill_powerbi: document.getElementById('skill_powerbi').checked,
+      skill_excel: document.getElementById('skill_excel').checked,
+      skill_communication: document.getElementById('skill_communication').checked,
+      resume_file_name: resumeFileName,
+      cover_letter_file_name: coverLetterFileName,
+      certify_true: document.getElementById('certify_true').checked,
+      marketing_emails: document.getElementById('marketing_emails').checked
+    });
+    window.location.href = 'page4_review.html';
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "Example student",
+  "education": [
+    "Graduate analytics student"
+  ],
+  "background": [
+    "Operations"
+  ],
+  "technical_experience": {
+    "skills": [
+      "Python",
+      "Power BI"
+    ]
+  },
+  "expected_graduation": null,
+  "current_work_authorization_details": null
+}

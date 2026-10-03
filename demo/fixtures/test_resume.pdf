@@ -1,0 +1,4 @@
+%PDF-FIXTURE-NOT-A-REAL-PDF
+This is a placeholder file used only to test the resume-upload step of
+apply.py against the fictional testapp/ fixture. It is not a real resume
+and is not parsed as a PDF by any tool in this project.

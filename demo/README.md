@@ -1,0 +1,3 @@
+# Fictional fixtures
+All five companies and openings are invented. example.invalid is deliberately not a job source. Expected decisions: 01 RECOMMEND, 02 VERIFY, 03 SKIP, 04 SKIP, 05 SKIP. Fixture 01 assumes valid authorization for a fictional candidate; it does not establish Andrés's authorization.
+run_demo.py replays hand-authored assessments to test tools. It does NOT call an LLM and is not proof of agent reasoning. To evaluate the agent, ask Copilot to assess only the postings without opening demo/assessments/, using an explicitly synthetic profile with valid internship authorization. Compare afterwards and document mistakes.

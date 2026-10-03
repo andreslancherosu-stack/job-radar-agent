@@ -1,0 +1,12 @@
+{
+  "source_kind": "demo",
+  "source_url": "https://example.invalid/03",
+  "open": true,
+  "verified_on": "2026-09-09",
+  "deadline": null,
+  "human_verified": false,
+  "company": "Example Finance",
+  "role": "Business Analyst",
+  "job_id": "DEMO-03",
+  "text": "Graduate students accepted. Python and Power BI required. No full-time analytics experience required. Candidates needing current or future sponsorship are not eligible."
+}

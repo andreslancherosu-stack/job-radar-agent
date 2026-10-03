@@ -1,0 +1,12 @@
+{
+  "source_kind": "demo",
+  "source_url": "https://example.invalid/02",
+  "open": true,
+  "verified_on": "2026-09-09",
+  "deadline": null,
+  "human_verified": false,
+  "company": "Example Consulting",
+  "role": "Analytics Associate",
+  "job_id": "DEMO-02",
+  "text": "Graduate students accepted. Python and Power BI required. No full-time analytics experience required. Work authorization and sponsorship are not described."
+}

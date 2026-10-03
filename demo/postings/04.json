@@ -1,0 +1,12 @@
+{
+  "source_kind": "demo",
+  "source_url": "https://example.invalid/04",
+  "open": true,
+  "verified_on": "2026-09-09",
+  "deadline": null,
+  "human_verified": false,
+  "company": "Example Technology",
+  "role": "Senior Data Scientist",
+  "job_id": "DEMO-04",
+  "text": "Graduate students accepted. Python required. Five years of professional data science experience required. International students with valid work authorization are accepted."
+}

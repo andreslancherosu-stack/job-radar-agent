@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application - Asynchronous Type-Ahead Combobox</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .combobox-wrap { position: relative; }
+  .combobox-trigger { width: 100%; padding: 6px; border: 1px solid #999; }
+  .listbox { position: absolute; left: 0; right: 0; border: 1px solid #999; background: white; z-index: 10; list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
+  .listbox[hidden] { display: none; }
+  .listbox li { padding: 6px; cursor: pointer; }
+  .listbox li:hover, .listbox li:focus { background: #eef; }
+</style>
+</head>
+<body>
+<h1>Fictional Company Careers - Asynchronous Type-Ahead Combobox Test</h1>
+<p class="progress">Models a real school-picker: the trigger IS an editable text input (role=combobox), and the option list only populates after typing, with a simulated network delay — like the real Momentum/Greenhouse School field.</p>
+
+<div class="field">
+  <label id="school_label" for="school_trigger">School</label>
+  <div class="combobox-wrap">
+    <input type="text" id="school_trigger" class="combobox-trigger" role="combobox"
+           aria-haspopup="listbox" aria-expanded="false" aria-labelledby="school_label"
+           aria-controls="school_listbox" autocomplete="off">
+    <ul class="listbox" id="school_listbox" role="listbox" hidden aria-labelledby="school_label"></ul>
+  </div>
+  <div class="error" id="school_trigger_error"></div>
+</div>
+
+<div class="field">
+  <label for="full_name">Full Name</label>
+  <input type="text" id="full_name" name="full_name">
+</div>
+
+<script src="app.js"></script>
+<script>
+  const SCHOOLS = [
+    'The University of Texas at Dallas',
+    'University of Texas - Dallas',
+    'The University of Texas at El Paso (UTEP)',
+    'University of Texas at Arlington',
+    'University of Texas at Austin',
+    'Universidad de la Sabana',
+    'Texas A&M University',
+    'Southern Methodist University',
+  ];
+
+  const trigger = document.getElementById('school_trigger');
+  const listbox = document.getElementById('school_listbox');
+  let searchTimer = null;
+
+  function renderOptions(matches) {
+    listbox.innerHTML = matches.map(name => `<li role="option" tabindex="-1">${name}</li>`).join('');
+    listbox.hidden = matches.length === 0;
+    trigger.setAttribute('aria-expanded', String(matches.length > 0));
+    listbox.querySelectorAll('li[role="option"]').forEach((opt) => {
+      opt.addEventListener('click', function () {
+        trigger.value = opt.textContent;
+        listbox.hidden = true;
+        trigger.setAttribute('aria-expanded', 'false');
+        autosave({ school: opt.textContent });
+      });
+    });
+  }
+
+  function autosave(patch) { saveData(Object.assign({}, loadData(), patch)); }
+
+  trigger.addEventListener('input', function () {
+    const query = trigger.value.trim().toLowerCase();
+    if (searchTimer) clearTimeout(searchTimer);
+    if (!query) { listbox.hidden = true; return; }
+    // Simulated async network search, like a real school-picker's backend
+    // lookup — this is exactly what a fixed 0ms/no-wait click would miss.
+    searchTimer = setTimeout(function () {
+      const matches = SCHOOLS.filter(s => s.toLowerCase().includes(query));
+      renderOptions(matches);
+    }, 400);
+  });
+
+  document.getElementById('full_name').addEventListener('input', (e) => autosave({ full_name: e.target.value }));
+  restoreField('full_name');
+  const saved = loadData();
+  if (saved.school) { trigger.value = saved.school; }
+</script>
+</body>
+</html>
