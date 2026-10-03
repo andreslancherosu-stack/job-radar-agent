@@ -110,6 +110,31 @@ def load_dotenv_if_present(path='.env'):
     return True
 
 
+PLACEHOLDER_MARKERS = ('replace-with-your-real-key', 'your-key-here', 'sk-ant-your')
+
+
+def api_key_problem():
+    """Return a human-readable reason the key is unusable, or None if it looks real.
+
+    A copied-but-unedited .env is the most likely setup mistake, and reporting
+    it as "configured" would turn a trivial fix into a confusing auth error
+    halfway through a run.
+    """
+    key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not key:
+        return 'ANTHROPIC_API_KEY is not set (no .env file, or the file has no value).'
+    if any(marker in key for marker in PLACEHOLDER_MARKERS):
+        return ('.env still contains the placeholder from .env.example. Replace it with your real key '
+                'from https://console.anthropic.com/settings/keys')
+    if not key.startswith('sk-ant-'):
+        return 'ANTHROPIC_API_KEY does not look like an Anthropic key (expected it to start with sk-ant-).'
+    return None
+
+
+def api_key_is_real():
+    return api_key_problem() is None
+
+
 class Metrics:
     """Measured, not promised. Printed at the end of every run."""
 
@@ -169,11 +194,10 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
             import anthropic
         except ImportError:
             raise RuntimeError('The `anthropic` package is not installed. Run: py -m pip install -r requirements.txt')
-        if not os.environ.get('ANTHROPIC_API_KEY'):
-            raise RuntimeError(
-                'ANTHROPIC_API_KEY is not set. Create a .env file next to agent.py containing:\n'
-                '    ANTHROPIC_API_KEY=sk-ant-your-real-key\n'
-                'See .env.example. Never paste the key into a chat.')
+        problem = api_key_problem()
+        if problem:
+            raise RuntimeError(problem + '\nEdit the .env file next to agent.py, then re-run. '
+                                         'Never paste the key into a chat.')
         client = anthropic.Anthropic()
 
     messages = [{'role': 'user', 'content': task}]
@@ -290,7 +314,8 @@ def main():
 
     if args.command == 'check':
         print(json.dumps({
-            'anthropic_api_key_configured': bool(os.environ.get('ANTHROPIC_API_KEY')),
+            'anthropic_api_key_configured': api_key_is_real(),
+            'api_key_problem': api_key_problem(),
             'model': os.environ.get('JOB_RADAR_MODEL') or DEFAULT_MODEL,
             'env_file_found': Path(args.env_file).exists(),
             'tools_registered': sorted(tools.TOOL_REGISTRY),
