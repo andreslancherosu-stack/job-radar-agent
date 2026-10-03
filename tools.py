@@ -29,6 +29,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import answers
 import radar
 
 PROFILE_PATH = Path('private/profile.json')
@@ -183,6 +184,57 @@ def check_application_history(company, job_id=None, source_url=None):
     }
 
 
+def get_confirmed_answers(questions=None):
+    """Return previously CONFIRMED application answers from the answer bank.
+
+    THE BUG THIS FIXES (measured 2026-10-03): the agent had no way to read
+    private/answer_bank.json at all. get_profile_facts reads only profile.json,
+    so fifteen answers the user had already confirmed on 2026-09-26 -- GPA band,
+    onsite willingness, OPT status, data-sharing consent, how-they-heard -- were
+    invisible to the model, which correctly concluded they were "unknown" and
+    asked the user to supply them a second time. Resume-derived uncertainty in
+    the profile must never override an explicit prior confirmation recorded here.
+
+    Pass `questions` to look up specific question texts (exact-normalized
+    match); omit it to list every confirmed answer. Only confirmed entries are
+    ever returned -- an unconfirmed draft is not an answer.
+    """
+    bank = answers.load_bank()
+    entries = [e for e in bank.get('entries', []) if e.get('confirmed')]
+
+    if questions is not None:
+        if not isinstance(questions, list) or not questions:
+            raise ValueError('questions must be a non-empty list of question texts, or omitted entirely')
+        found, missing = [], []
+        for q in questions:
+            match = answers.find_exact_match(bank, q)
+            if match:
+                found.append({'question': match['question'], 'answer': match['answer'],
+                              'source': match.get('source'), 'confirmed_on': match.get('date')})
+            else:
+                missing.append(q)
+        return {
+            'matched': found,
+            'no_confirmed_answer_for': missing,
+            'scope_rule': SCOPE_RULE,
+        }
+
+    return {
+        'confirmed_answers': [{'question': e['question'], 'answer': e['answer'],
+                               'source': e.get('source'), 'confirmed_on': e.get('date')}
+                              for e in entries],
+        'count': len(entries),
+        'scope_rule': SCOPE_RULE,
+    }
+
+
+SCOPE_RULE = ('These are the user\'s own prior confirmations and OVERRIDE resume-derived uncertainty '
+              'in the profile. Do NOT ask the user to re-answer one of these. BUT reuse an '
+              'employer-specific answer (especially a CONSENT) only when the employer, the parties, '
+              'the purpose and the wording are the same; if the current question differs, treat it as '
+              'unanswered rather than stretching an old consent to cover it.')
+
+
 def request_missing_fact(question, why_needed):
     """Signal that a REQUIRED fact is unknown and only the human can supply it.
 
@@ -320,6 +372,21 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        'name': 'get_confirmed_answers',
+        'description': ('Read answers the user has ALREADY CONFIRMED for application questions. '
+                        'ALWAYS call this before concluding that a form question is unanswerable -- '
+                        'these confirmations override resume-derived uncertainty in the profile, and '
+                        'asking the user to repeat one is a defect. Omit `questions` to list all.'),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'questions': {'type': 'array', 'items': {'type': 'string'},
+                              'description': 'Exact question texts to look up. Omit to list every '
+                                             'confirmed answer.'},
+            },
+        },
+    },
+    {
         'name': 'save_assessment',
         'description': ('Persist YOUR assessment of this posting to the canonical ledger. Every dimension '
                         'quote must be copied verbatim from the posting text or the save is rejected. '
@@ -346,6 +413,7 @@ TOOL_REGISTRY = {
     'get_profile_facts': get_profile_facts,
     'get_posting': get_posting,
     'check_application_history': check_application_history,
+    'get_confirmed_answers': get_confirmed_answers,
     'request_missing_fact': request_missing_fact,
     'save_assessment': save_assessment,
 }

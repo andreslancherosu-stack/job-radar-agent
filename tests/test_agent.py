@@ -185,6 +185,70 @@ class AgentLoopMechanics(unittest.TestCase):
         self.assertGreaterEqual(m['elapsed_seconds'], 0)
 
 
+class ConfirmedAnswersReachTheAgent(unittest.TestCase):
+    """Regression for a measured information-flow defect (2026-10-03).
+
+    The agent had no tool that could read private/answer_bank.json. Fifteen
+    answers the user confirmed on 2026-09-26 were therefore invisible to the
+    model, which correctly reported them "unknown" and asked the user to
+    supply them a SECOND time. Resume-derived uncertainty in profile.json
+    must never override an explicit prior confirmation.
+    """
+
+    # Every one of these was confirmed by the user and then re-asked by the agent.
+    PREVIOUSLY_RE_ASKED = [
+        'What is your cumulative GPA?',
+        'Are you comfortable working onsite 5 days/week in our Dallas office at 2601 Olive Street?',
+        'If yes, are you currently in a period of Optional Practical Training (OPT)?',
+        'I consent to have my personal data disclosed to other Momentum Group entities to be '
+        'considered for all open positions that fit my profile.',
+    ]
+
+    def test_the_tool_is_registered_at_all(self):
+        """The root cause was a missing tool, not a bad answer."""
+        self.assertIn('get_confirmed_answers', tools.TOOL_REGISTRY)
+        self.assertIn('get_confirmed_answers', {d['name'] for d in tools.TOOL_DEFINITIONS})
+
+    def test_each_previously_re_asked_question_now_resolves(self):
+        observation, is_error = tools.execute_tool(
+            'get_confirmed_answers', {'questions': self.PREVIOUSLY_RE_ASKED})
+        self.assertFalse(is_error)
+        self.assertEqual(observation['no_confirmed_answer_for'], [],
+                         'these were already confirmed and must not come back unanswered')
+        answers_by_q = {m['question']: m['answer'] for m in observation['matched']}
+        self.assertEqual(answers_by_q['What is your cumulative GPA?'], '3.0-3.49')
+        self.assertEqual(
+            answers_by_q['If yes, are you currently in a period of Optional Practical Training (OPT)?'],
+            'No')
+
+    def test_unconfirmed_entries_are_never_returned(self):
+        observation, _ = tools.execute_tool('get_confirmed_answers', {})
+        bank = __import__('answers').load_bank()
+        confirmed_count = sum(1 for e in bank.get('entries', []) if e.get('confirmed'))
+        self.assertEqual(observation['count'], confirmed_count)
+
+    def test_the_observation_actually_reaches_the_model_through_the_loop(self):
+        """End-to-end through run_agent: the answer must arrive in a tool_result."""
+        client = ScriptedClient([
+            [tool_use_block('toolu_ab', 'get_confirmed_answers',
+                            {'questions': ['What is your cumulative GPA?']})],
+            [text_block('GPA band is already confirmed; I will not ask again.')],
+        ], stop_reasons=['tool_use', 'end_turn'])
+        result = agent.run_agent('task', client=client, verbose=False)
+
+        second_call = client.received_messages[1]
+        tool_results = [b for m in second_call if isinstance(m.get('content'), list)
+                        for b in m['content'] if isinstance(b, dict) and b.get('type') == 'tool_result']
+        payload = json.loads(tool_results[0]['content'])
+        self.assertEqual(payload['matched'][0]['answer'], '3.0-3.49',
+                         'the confirmed answer must physically reach the model')
+        self.assertEqual(result['status'], 'completed')
+
+    def test_scope_rule_warns_against_blind_consent_reuse(self):
+        observation, _ = tools.execute_tool('get_confirmed_answers', {})
+        self.assertIn('CONSENT', observation['scope_rule'].upper())
+
+
 class SafetyInvariants(unittest.TestCase):
 
     def test_no_submission_tool_exists_anywhere(self):
