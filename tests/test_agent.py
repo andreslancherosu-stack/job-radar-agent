@@ -29,19 +29,73 @@ def tool_use_block(block_id, name, payload):
 class ScriptedClient:
     """Stands in for anthropic.Anthropic(). Replays a fixed list of responses."""
 
-    def __init__(self, scripted_contents):
+    def __init__(self, scripted_contents, stop_reasons=None):
         self._scripted = list(scripted_contents)
+        self._stop_reasons = list(stop_reasons) if stop_reasons else None
         self.received_messages = []
         self.messages = self
 
     def create(self, **kwargs):
         self.received_messages.append(kwargs['messages'])
         content = self._scripted.pop(0)
+        if self._stop_reasons:
+            stop = self._stop_reasons.pop(0)
+        else:
+            stop = 'tool_use' if any(getattr(b, 'type', None) == 'tool_use' for b in content) else 'end_turn'
         return types.SimpleNamespace(
             content=content,
             usage=types.SimpleNamespace(input_tokens=100, output_tokens=20),
-            stop_reason='tool_use' if any(getattr(b, 'type', None) == 'tool_use' for b in content) else 'end_turn',
+            stop_reason=stop,
         )
+
+
+class CompletionIsNotAssumed(unittest.TestCase):
+    """Silence from the model is not success. These guard requirement 3."""
+
+    def test_truncated_response_is_not_reported_as_completed(self):
+        client = ScriptedClient([[text_block('I was about to say that the candi')]],
+                                stop_reasons=['max_tokens'])
+        result = agent.run_agent('task', client=client, verbose=False,
+                                 required_outcome_tool='save_assessment')
+        self.assertEqual(result['status'], 'truncated')
+        self.assertIn('cut off', result['problem'])
+        self.assertEqual(result['metrics']['api_stop_reason'], 'max_tokens')
+
+    def test_ending_without_the_required_save_is_not_completed(self):
+        client = ScriptedClient([[text_block('Looks like a decent role overall.')]],
+                                stop_reasons=['end_turn'])
+        result = agent.run_agent('task', client=client, verbose=False,
+                                 required_outcome_tool='save_assessment')
+        self.assertEqual(result['status'], 'ended_without_required_outcome')
+        self.assertFalse(result['required_outcome_met'])
+
+    def test_a_failed_save_does_not_count_as_the_required_outcome(self):
+        """A rejected save must not be mistaken for a completed task."""
+        bad_save = {'source': 'momentum_associate_strategy_ops_analyst.json', 'fit': 'GOOD FIT',
+                    'next_action': 'apply',
+                    'experience': {'status': 'pass', 'quote': 'NOT IN THE POSTING AT ALL',
+                                   'reason': 'fabricated'},
+                    'education': {'status': 'uncertain', 'quote': '', 'reason': 'n/a'},
+                    'work_authorization': {'status': 'uncertain', 'quote': '', 'reason': 'n/a'},
+                    'career_fit': {'status': 'uncertain', 'quote': '', 'reason': 'n/a'}}
+        client = ScriptedClient([
+            [tool_use_block('toolu_s', 'save_assessment', bad_save)],
+            [text_block('Saved, I think.')],
+        ], stop_reasons=['tool_use', 'end_turn'])
+        result = agent.run_agent('task', client=client, verbose=False,
+                                 required_outcome_tool='save_assessment')
+        self.assertEqual(result['status'], 'ended_without_required_outcome')
+        self.assertNotIn('save_assessment', result['metrics']['tools_that_succeeded'])
+
+    def test_successful_save_then_end_turn_is_completed(self):
+        client = ScriptedClient([
+            [tool_use_block('toolu_ok', 'get_profile_facts', {'sections': ['identity']})],
+            [text_block('Here is my conclusion.')],
+        ], stop_reasons=['tool_use', 'end_turn'])
+        result = agent.run_agent('task', client=client, verbose=False,
+                                 required_outcome_tool='get_profile_facts')
+        self.assertEqual(result['status'], 'completed')
+        self.assertTrue(result['required_outcome_met'])
 
 
 class AgentLoopMechanics(unittest.TestCase):
@@ -85,7 +139,7 @@ class AgentLoopMechanics(unittest.TestCase):
         ])
         result = agent.run_agent('task', client=client, verbose=False)
         self.assertEqual(result['status'], 'needs_human_input')
-        self.assertEqual(result['metrics']['stop_reason'], 'human_input_required')
+        self.assertEqual(result['metrics']['loop_stop_reason'], 'human_input_required')
         self.assertIn('availability', result['question']['question'])
 
     def test_unknown_tool_becomes_a_recoverable_observation_not_a_crash(self):

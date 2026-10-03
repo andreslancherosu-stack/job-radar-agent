@@ -95,3 +95,27 @@ class ImportUrlWithoutNetwork(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ClosedPostingDetection(unittest.TestCase):
+    """Measured 2026-10-02: five of six Greenhouse postings found via search had
+    been taken down and 200-OK'd to a careers index. The old heuristics passed
+    all of them, so a landing page could be ingested as a job description."""
+
+    POSTING = 'https://job-boards.greenhouse.io/acme/jobs/123'
+
+    def test_redirect_to_board_is_flagged(self):
+        warnings = ip.redirected_away_from_posting(
+            self.POSTING, 'https://job-boards.greenhouse.io/acme', 'Current openings at Acme')
+        self.assertTrue(any('REDIRECTED' in w for w in warnings))
+
+    def test_index_like_text_is_flagged_even_without_a_redirect(self):
+        warnings = ip.redirected_away_from_posting(
+            self.POSTING, self.POSTING, 'View all jobs and join our team today')
+        self.assertTrue(any('job INDEX' in w for w in warnings))
+
+    def test_a_real_posting_is_not_flagged(self):
+        warnings = ip.redirected_away_from_posting(
+            self.POSTING, self.POSTING,
+            'Back to jobs Data Analyst Remote Apply Minimum qualifications 2 or more years')
+        self.assertEqual(warnings, [])

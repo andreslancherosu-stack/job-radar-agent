@@ -145,7 +145,9 @@ class Metrics:
         self.tool_failures = 0
         self.input_tokens = 0
         self.output_tokens = 0
-        self.stop_reason = None
+        self.stop_reason = None          # why OUR loop ended
+        self.api_stop_reason = None      # why the LAST API response ended (truncation shows up here)
+        self.successful_tools = set()    # tools that actually returned a non-error observation
 
     def as_dict(self):
         return {
@@ -155,7 +157,9 @@ class Metrics:
             'tool_failures': self.tool_failures,
             'input_tokens': self.input_tokens,
             'output_tokens': self.output_tokens,
-            'stop_reason': self.stop_reason,
+            'loop_stop_reason': self.stop_reason,
+            'api_stop_reason': self.api_stop_reason,
+            'tools_that_succeeded': sorted(self.successful_tools),
         }
 
 
@@ -180,7 +184,7 @@ def build_toolset(name):
 
 
 def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbose=True,
-              tool_definitions=None, tool_registry=None):
+              tool_definitions=None, tool_registry=None, required_outcome_tool=None):
     """The agent loop. `client` is injectable so tests can run it without a network."""
     model = model or os.environ.get('JOB_RADAR_MODEL') or DEFAULT_MODEL
     if tool_definitions is None:
@@ -213,6 +217,7 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
             messages=messages,
         )
         metrics.api_calls += 1
+        metrics.api_stop_reason = getattr(response, 'stop_reason', None)
         usage = getattr(response, 'usage', None)
         if usage is not None:
             metrics.input_tokens += getattr(usage, 'input_tokens', 0) or 0
@@ -226,10 +231,41 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
             if verbose and text.strip():
                 print('\n[step %d] model: %s' % (step, text.strip()))
 
-        # The model answered without asking for anything else -> we are done.
+        # The model stopped asking for tools. That alone does NOT mean success:
+        # the response may have been cut off mid-sentence, or the model may have
+        # talked its way to the end without ever producing the required outcome.
+        # Both of those have to be reported as what they are.
         if not tool_uses:
+            api_stop = getattr(response, 'stop_reason', None)
+            metrics.api_stop_reason = api_stop
+            final_text = '\n'.join(said).strip()
+
+            if api_stop == 'max_tokens':
+                metrics.stop_reason = 'truncated'
+                return {'status': 'truncated', 'final_text': final_text,
+                        'required_outcome_met': required_outcome_tool in metrics.successful_tools
+                                                if required_outcome_tool else None,
+                        'problem': ('The model hit max_tokens and its reply was cut off mid-generation. '
+                                    'This is NOT a completed task.'),
+                        'transcript': transcript, 'metrics': metrics.as_dict()}
+
+            if api_stop == 'refusal':
+                metrics.stop_reason = 'refusal'
+                return {'status': 'refusal', 'final_text': final_text,
+                        'transcript': transcript, 'metrics': metrics.as_dict()}
+
+            if required_outcome_tool and required_outcome_tool not in metrics.successful_tools:
+                metrics.stop_reason = 'ended_without_required_outcome'
+                return {'status': 'ended_without_required_outcome', 'final_text': final_text,
+                        'required_outcome_met': False,
+                        'problem': ('The run ended without a successful %s call, so the task outcome was '
+                                    'not achieved even though the model stopped talking.'
+                                    % required_outcome_tool),
+                        'transcript': transcript, 'metrics': metrics.as_dict()}
+
             metrics.stop_reason = 'final_answer'
-            return {'status': 'completed', 'final_text': '\n'.join(said).strip(),
+            return {'status': 'completed', 'final_text': final_text,
+                    'required_outcome_met': True if required_outcome_tool else None,
                     'transcript': transcript, 'metrics': metrics.as_dict()}
 
         # Keep the assistant turn verbatim; tool_result blocks must answer it.
@@ -247,7 +283,11 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
             if is_error:
                 metrics.tool_failures += 1
                 if verbose:
-                    print('[step %d]   !! %s' % (step, observation.get('error', '')[:200]))
+                    print('[step %d]   !! FAILED: %s' % (step, observation.get('error', '')[:200]))
+            else:
+                metrics.successful_tools.add(block.name)
+                if verbose:
+                    print('[step %d]   ok' % step)
             transcript.append({'step': step, 'role': 'tool', 'name': block.name,
                                'input': block.input, 'observation': observation, 'is_error': is_error})
             results_for_model.append({
@@ -270,7 +310,11 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
 
     # ---- STEP 6b: explicit execution limit ----
     metrics.stop_reason = 'max_steps_reached'
-    return {'status': 'max_steps_reached', 'transcript': transcript, 'metrics': metrics.as_dict()}
+    return {'status': 'max_steps_reached',
+            'required_outcome_met': (required_outcome_tool in metrics.successful_tools
+                                     if required_outcome_tool else None),
+            'problem': 'Hit the %d-step limit before finishing. The task is INCOMPLETE.' % max_steps,
+            'transcript': transcript, 'metrics': metrics.as_dict()}
 
 
 def build_assess_task(source):
@@ -323,9 +367,12 @@ def main():
         }, indent=2))
         return
 
+    required_outcome = None
     if args.command == 'assess':
         task = build_assess_task(args.source)
         definitions, registry = build_toolset('assess')
+        # The assess task is only "done" if the assessment was actually saved.
+        required_outcome = 'save_assessment'
     else:
         task = ('You are working on live application run %r.\n\n%s\n\n'
                 'Observe the real page before acting. Never advance while required fields are '
@@ -335,17 +382,26 @@ def main():
 
     try:
         result = run_agent(task, model=args.model, max_steps=args.max_steps,
-                           tool_definitions=definitions, tool_registry=registry)
+                           tool_definitions=definitions, tool_registry=registry,
+                           required_outcome_tool=required_outcome)
     except RuntimeError as e:
         print('ERROR: %s' % e, file=sys.stderr)
         sys.exit(1)
 
     print('\n' + '=' * 70)
     print('status: %s' % result['status'])
+    if result.get('problem'):
+        print('PROBLEM: %s' % result['problem'])
+    if result.get('required_outcome_met') is not None:
+        print('required outcome (%s) met: %s' % (required_outcome, result['required_outcome_met']))
     if result['status'] == 'needs_human_input':
         q = result['question']
         print('\nThe agent needs one fact from you:\n  Q: %s\n  why: %s' % (q['question'], q['why_needed']))
     print('\nmetrics: %s' % json.dumps(result['metrics']))
+    # A run that did not achieve its outcome must not look like a success to a
+    # shell script, a CI job, or a tired human reading the last line.
+    if result['status'] != 'completed':
+        sys.exit(2)
     if args.json:
         print('\n' + json.dumps(result, ensure_ascii=False, indent=2, default=str))
 

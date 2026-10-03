@@ -126,11 +126,37 @@ def build_draft_posting(url, company, role, job_id, text, retrieved_day, warning
     }
 
 
+def redirected_away_from_posting(requested_url, final_url, text):
+    """A closed posting usually REDIRECTS to the employer's board or careers page.
+
+    Measured on 2026-10-02: five of six Greenhouse postings found via search had
+    been taken down, and each one 200-OK'd to a careers index instead. The old
+    length/JS heuristics passed all of them happily, so a careers landing page
+    would have been ingested and assessed as if it were the job description.
+    A redirect away from the requested posting URL is the strongest available
+    signal that the vacancy is gone.
+    """
+    warnings = []
+    if requested_url.rstrip('/') != final_url.rstrip('/'):
+        warnings.append('REDIRECTED: requested %s but the server returned %s. A posting URL that '
+                        'redirects to a board or careers page almost always means the vacancy has '
+                        'been taken down. Do NOT ingest this as posting text without checking the '
+                        'page yourself.' % (requested_url, final_url))
+    index_markers = ('current openings', 'all jobs', 'open roles', 'view all jobs',
+                     'create a job alert', 'join our team', 'browse jobs')
+    lowered = text.lower()
+    hits = [m for m in index_markers if m in lowered]
+    if hits:
+        warnings.append('Extracted text reads like a job INDEX rather than one posting (matched: %s). '
+                        'Verify this is the posting body and not a listings page.' % ', '.join(hits))
+    return warnings
+
+
 def import_url(url, company, role, job_id, out_path=None, timeout=15, day=None):
     day = day or date.today().isoformat()
     final_url, status, html = fetch_url(url, timeout=timeout)
     text = html_to_text(html)
-    warnings = looks_incomplete(text)
+    warnings = looks_incomplete(text) + redirected_away_from_posting(url, final_url, text)
     posting = build_draft_posting(final_url, company, role, job_id, text, day, warnings)
     out_path = Path(out_path) if out_path else DRAFTS_DIR / (slug_for(company, role) + '.json')
     out_path.parent.mkdir(parents=True, exist_ok=True)
