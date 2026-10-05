@@ -960,6 +960,97 @@ class ScopedClickButtonRegression(unittest.TestCase):
             browser.close()
 
 
+class ScopedAttachmentVerificationRegression(unittest.TestCase):
+    """PREPARED CAPABILITY, not yet deployed to any live worker (added
+    2026-10-04). Reproduces the exact measured gap on a real Momentum
+    Greenhouse application (req 8608934002): the job DESCRIPTION precedes
+    the application form, so inspect's body_sample (capped at the first
+    3000 characters) never reaches the resume widget at all, and the
+    widget's file <input> id is dynamically generated and can be ABSENT
+    after a successful upload replaces its own DOM -- so neither existing
+    read path can independently re-check an attachment without re-uploading."""
+
+    def _page(self, pw, filler_chars=3400, widget_html=None):
+        widget_html = widget_html or (
+            '<div class="attach"><h3>Resume</h3><p>my_resume.pdf — uploaded successfully</p></div>')
+        filler = '<p>' + ('Lorem ipsum job description text. ' * (filler_chars // 34)) + '</p>'
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content('<body>' + filler + widget_html + '</body>')
+        return browser, page
+
+    def test_committed_attachment_is_verified_past_the_3000_char_cap(self):
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser, page = self._page(pw)
+            body_sample = page.locator('body').inner_text()[:3000]
+            result = apply.read_attachment_state(page, 'Resume', expected_filename='my_resume.pdf')
+            browser.close()
+        self.assertNotIn('my_resume.pdf', body_sample,
+                         'the fixture must reproduce the gap -- filename past the 3000-char cap')
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['expected_filename_present'])
+        self.assertFalse(result['failure_language_present'])
+        self.assertFalse(result['pending_upload_language_present'])
+
+    def test_missing_input_id_does_not_block_verification(self):
+        # The widget below has NO <input> at all -- exactly what a real
+        # upload widget can look like after it replaces its own DOM post-
+        # success. A selector/id-based read would find nothing; the scoped
+        # text read still works because it never depended on the input.
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser, page = self._page(pw, widget_html=(
+                '<div class="attach"><h3>Resume</h3>'
+                '<span>V5_Resume_Lancheros.pdf</span><button>Remove</button></div>'))
+            result = apply.read_attachment_state(page, 'Resume', expected_filename='V5_Resume_Lancheros.pdf')
+            browser.close()
+        self.assertTrue(result['ok'])
+
+    def test_pending_upload_is_not_reported_as_verified(self):
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser, page = self._page(pw, widget_html=(
+                '<div class="attach"><h3>Resume</h3><p>Uploading my_resume.pdf...</p></div>'))
+            result = apply.read_attachment_state(page, 'Resume', expected_filename='my_resume.pdf')
+            browser.close()
+        self.assertFalse(result['ok'])
+        self.assertTrue(result['pending_upload_language_present'])
+
+    def test_failure_language_is_not_reported_as_verified(self):
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser, page = self._page(pw, widget_html=(
+                '<div class="attach"><h3>Resume</h3><p>Upload failed: my_resume.pdf. Please try again.</p></div>'))
+            result = apply.read_attachment_state(page, 'Resume', expected_filename='my_resume.pdf')
+            browser.close()
+        self.assertFalse(result['ok'])
+        self.assertTrue(result['failure_language_present'])
+
+    def test_wrong_filename_is_not_reported_as_verified(self):
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser, page = self._page(pw)
+            result = apply.read_attachment_state(page, 'Resume', expected_filename='a_totally_different_file.pdf')
+            browser.close()
+        self.assertFalse(result['ok'])
+        self.assertFalse(result['expected_filename_present'])
+
+    def test_ambiguous_scope_refuses_rather_than_guesses(self):
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.set_content('''
+                <div><h3>Resume</h3><p>a.pdf</p></div>
+                <div><h3>Resume</h3><p>b.pdf</p></div>
+            ''')
+            result = apply.read_attachment_state(page, 'Resume', expected_filename='a.pdf')
+            browser.close()
+        self.assertTrue(result['inconclusive'])
+        self.assertFalse(result['ok'])
+
+
 class Field:
     def __init__(self, value=''):
         self.value = value

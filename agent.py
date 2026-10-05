@@ -193,7 +193,8 @@ def build_toolset(name):
 
 
 def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbose=True,
-              tool_definitions=None, tool_registry=None, required_outcome_tool=None):
+              tool_definitions=None, tool_registry=None, required_outcome_tool=None,
+              retry_backoff_seconds=2):
     """The agent loop. `client` is injectable so tests can run it without a network."""
     model = model or os.environ.get('JOB_RADAR_MODEL') or DEFAULT_MODEL
     if tool_definitions is None:
@@ -202,11 +203,15 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
         tool_registry = tools.TOOL_REGISTRY
     metrics = Metrics()
 
+    # Imported unconditionally (not just when client is None) because the
+    # retry loop below needs anthropic.APIConnectionError as a real type to
+    # catch even when a test injects its own client double.
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError('The `anthropic` package is not installed. Run: py -m pip install -r requirements.txt')
+
     if client is None:
-        try:
-            import anthropic
-        except ImportError:
-            raise RuntimeError('The `anthropic` package is not installed. Run: py -m pip install -r requirements.txt')
         problem = api_key_problem()
         if problem:
             raise RuntimeError(problem + '\nEdit the .env file next to agent.py, then re-run. '
@@ -218,13 +223,40 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
 
     for step in range(1, max_steps + 1):
         # ---- STEP 1: call the model with the conversation so far + our tools ----
-        response = client.messages.create(
-            model=model,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            tools=tool_definitions,
-            messages=messages,
-        )
+        # A real, measured gap (2026-10-04): a transient connection drop here
+        # raised anthropic.APIConnectionError, which nothing caught -- it
+        # crashed the whole process after tool calls had already made real,
+        # verified progress on a live form. At most 2 retries (bounded, per
+        # project policy against unbounded retry loops) with short backoff,
+        # ONLY for errors that are genuinely about not having reached the
+        # server -- never for an auth or bad-request error, which retrying
+        # cannot fix and would just repeat.
+        response = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=DEFAULT_MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    tools=tool_definitions,
+                    messages=messages,
+                )
+                break
+            except anthropic.APIConnectionError as e:
+                last_error = e
+                if attempt < 2:
+                    if verbose:
+                        print('[step %d] connection error (attempt %d/3), retrying: %s'
+                              % (step, attempt + 1, e))
+                    time.sleep(retry_backoff_seconds * (attempt + 1))
+        if response is None:
+            metrics.stop_reason = 'connection_failed'
+            return {'status': 'connection_failed',
+                    'problem': ('Could not reach the Anthropic API after 3 attempts: %s. No tool call '
+                                'was lost -- everything verified before this point is still on the live '
+                                'page. Re-run once connectivity is back; do not loop retrying.' % last_error),
+                    'transcript': transcript, 'metrics': metrics.as_dict()}
         metrics.api_calls += 1
         metrics.api_stop_reason = getattr(response, 'stop_reason', None)
         usage = getattr(response, 'usage', None)

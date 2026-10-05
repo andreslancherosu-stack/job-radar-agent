@@ -1098,6 +1098,124 @@ _UPLOAD_FAILURE_NEAR_FILENAME = re.compile(
     r'\b(fail(?:ed|ure)?|error|try again|could not|cannot|unable to|rejected|invalid file|not (?:supported|accepted))\b',
     re.IGNORECASE)
 
+_UPLOAD_PENDING_LANGUAGE = re.compile(r'\b(uploading|upload in progress|please wait|processing)\b', re.IGNORECASE)
+
+_ATTACHMENT_TAG_ATTR = 'data-apply-attachment-index'
+
+
+def find_attachment_container(page, label_hint, scope=None):
+    """PREPARED, NOT YET DEPLOYED (written 2026-10-04; requires a worker
+    restart to take effect, which was deliberately not done to preserve a
+    live session -- see read_attachment_state below for the exact gap this
+    closes).
+
+    Locates the SINGLE scoped container for one attachment widget (e.g.
+    "Resume" or "Cover Letter"), keyed by its own visible section label --
+    never by the file <input>'s id, which is dynamically generated and
+    changes between page loads (measured on this same live page:
+    FileUpload_3j8h5wxhql one session, FileUpload_cq6iwczoj8 the next) and
+    which can disappear from the DOM entirely after a real widget replaces
+    itself post-upload (also measured, same page: the #resume input was
+    gone from a later inspect even though the earlier upload had verified
+    ok). Scoping by the widget's own stable section text survives both.
+
+    Same TreeWalker discipline as find_question_container, but does NOT
+    require a specific control inside the container -- unlike a yes/no
+    question, a COMPLETED attachment widget often shows only a filename and
+    a remove/replace control, no file <input> at all.
+
+    Checks uniqueness across the WHOLE scope before resolving anything: if
+    label_hint's own text appears on more than one visible leaf node, this
+    returns empty rather than silently picking whichever one document order
+    happened to reach first.
+
+    Returns a list of Locators (normally 0 or 1); a caller should refuse to
+    act -- never guess -- when it isn't exactly 1."""
+    js = '''(root, [labelHint, attr]) => {
+        root.querySelectorAll('[' + attr + ']').forEach(el => el.removeAttribute(attr));
+        const escape = s => s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+        // Word-boundary wrapped: a bare substring match caught itself on its
+        // own test fixture (measured during local testing, 2026-10-04) --
+        // the heading "Resume" matched case-insensitively INSIDE a filename
+        // like "my_resume.pdf" sitting in the same container, inflating the
+        // match count and triggering the overshoot guard on a perfectly
+        // valid, uniquely-resolvable container. Real resume filenames
+        // routinely contain the word "resume"; \\b prevents that collision
+        // in the common case (word characters including "_" extend through
+        // the boundary, so "my_resume" never falsely matches "resume" alone).
+        const hintRe = new RegExp('\\\\b' + escape(labelHint) + '\\\\b', 'i');
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+        let node, leaves = [];
+        while ((node = walker.nextNode())) {
+            const own = Array.from(node.childNodes)
+                .filter(n => n.nodeType === Node.TEXT_NODE)
+                .map(n => n.textContent).join(' ');
+            if (hintRe.test(own) && node.offsetParent !== null) { leaves.push(node); }
+        }
+        // Refuse on EITHER zero or more than one match across the whole
+        // scope -- two separate attachment widgets sharing a heading (e.g.
+        // "Resume" and a duplicate upload section) must not silently
+        // resolve to whichever one the walker reaches first. A caller
+        // seeing 0 containers back must treat that identically to "I don't
+        // know", never infer which section was meant.
+        if (leaves.length !== 1) return;
+        let container = leaves[0];
+        const leaf = leaves[0];
+        for (let depth = 0; depth < 15 && container && container !== root.parentElement; depth++) {
+            const text = container.innerText || '';
+            const count = (text.match(new RegExp(hintRe.source, 'gi')) || []).length;
+            if (count === 1 && container !== leaf) { container.setAttribute(attr, '1'); return; }
+            if (count > 1) return;  // overshot into a neighboring widget's territory
+            if (container === root) return;
+            container = container.parentElement;
+        }
+    }'''
+    target = scope.first if scope is not None else page.locator('body')
+    target.evaluate(js, [label_hint, _ATTACHMENT_TAG_ATTR])
+    tagged = target.locator(f'[{_ATTACHMENT_TAG_ATTR}]')
+    return [tagged.nth(i) for i in range(tagged.count())]
+
+
+def read_attachment_state(page, label_hint, expected_filename=None):
+    """PREPARED, NOT YET DEPLOYED -- see find_attachment_container above.
+
+    Read-only: the committed state of ONE attachment widget, scoped to its
+    own container text -- never a page-wide or uncapped-body search. This is
+    the read-only counterpart the upload check never had: verify_filled_
+    fields' upload branch only runs immediately after an actual upload
+    attempt inside the SAME fill_steps call, so there was previously no way
+    to independently re-check an attachment's state later without
+    re-uploading (which risks attaching a second time, and does not prove
+    anything about what the FIRST attempt actually left behind).
+
+    Directly closes a measured, reported gap: inspect's body_sample is
+    page.locator('body').inner_text()[:3000], and on a real page where the
+    job DESCRIPTION precedes the application form (measured: Momentum req
+    8608934002, the resume widget sits well past the first 3000 characters,
+    entirely consumed by company/role boilerplate), that cap structurally
+    cannot reach the attachment widget at all -- not a rare edge case.
+
+    Returns ok=True only when the expected filename is present in the
+    widget's OWN scoped text AND no failure or pending-upload language
+    appears in that same scope. Refuses (ok=False, inconclusive=True)
+    rather than guess when the container isn't uniquely resolved."""
+    containers = find_attachment_container(page, label_hint)
+    if len(containers) != 1:
+        return {'ok': False, 'inconclusive': True,
+                'reason': 'expected exactly 1 container for %r, found %d' % (label_hint, len(containers))}
+    text = containers[0].inner_text()[:2000]
+    filename_present = (expected_filename in text) if expected_filename else None
+    failure = bool(_UPLOAD_FAILURE_NEAR_FILENAME.search(text))
+    pending = bool(_UPLOAD_PENDING_LANGUAGE.search(text))
+    return {
+        'ok': (filename_present is not False) and not failure and not pending,
+        'inconclusive': False,
+        'container_text': text,
+        'expected_filename_present': filename_present,
+        'failure_language_present': failure,
+        'pending_upload_language_present': pending,
+    }
+
 
 def verify_filled_fields(page, page_plan, profile, answer_bank):
     """Re-reads every approved, non-skipped field from the LIVE page after
@@ -1264,8 +1382,8 @@ def worker_result_path(run_key):
     return RUN_STATE_DIR / (run_key + '_worker_result.json')
 
 
-WORKER_COMMANDS = ('goto', 'inspect', 'read_fields', 'fill_steps', 'fix_field_by_current_value', 'answer_question',
-                    'click_next', 'pause', 'status', 'close')
+WORKER_COMMANDS = ('goto', 'inspect', 'read_fields', 'read_attachment_state', 'fill_steps',
+                    'fix_field_by_current_value', 'answer_question', 'click_next', 'pause', 'status', 'close')
 
 
 def send_worker_command(run_key, command, timeout_seconds=120, poll_seconds=0.5):
@@ -1407,6 +1525,13 @@ def _run_worker_locked(run_key, profile_path, start_url=None, headless=True, ans
                                 entry['error'] = str(e)
                             values.append(entry)
                         result['values'] = values
+                    elif cmd == 'read_attachment_state':
+                        # Read-only, scoped to the ONE named attachment
+                        # widget's own container text -- never a page-wide
+                        # or uncapped-body search. See read_attachment_state's
+                        # own docstring for the exact gap this closes.
+                        result.update(read_attachment_state(
+                            page, command['label_hint'], command.get('expected_filename')))
                     elif cmd == 'fill_steps':
                         steps = command.get('steps', [])
                         for step in steps:
@@ -2031,6 +2156,12 @@ def main():
                                   'never an internal control name or field position.')
     worker_send_cmd.add_argument('--answer-label', default=None, help='For answer_question: the visible label '
                                   'of the option to select within that scoped question (e.g. "Yes"/"No").')
+    worker_send_cmd.add_argument('--label-hint', default=None, help='For read_attachment_state: the attachment '
+                                  'widget\'s own visible section text (e.g. "Resume") to scope the read to -- '
+                                  'never the file <input>\'s id, which is dynamically generated and can change '
+                                  'or disappear after a successful upload.')
+    worker_send_cmd.add_argument('--expected-filename', default=None, help='For read_attachment_state: the '
+                                  'filename to check for within the scoped widget text.')
     worker_send_cmd.add_argument('--scope-selector', default=None, help='For answer_question: optional CSS '
                                   'selector to further bound the search (e.g. when the same question text could '
                                   'legitimately appear more than once on the page).')
@@ -2101,6 +2232,12 @@ def main():
                 parser.error('read_fields requires --steps-json PATH (same step shape as fill_steps, '
                               'but nothing is written -- only current values are read back)')
             command['steps'] = read_json(args.steps_json)
+        elif args.cmd == 'read_attachment_state':
+            if not args.label_hint:
+                parser.error('read_attachment_state requires --label-hint (e.g. "Resume")')
+            command['label_hint'] = args.label_hint
+            if args.expected_filename:
+                command['expected_filename'] = args.expected_filename
         elif args.cmd == 'fix_field_by_current_value':
             if not args.contains or args.new_value is None:
                 parser.error('fix_field_by_current_value requires --contains and --new-value')

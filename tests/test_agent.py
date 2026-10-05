@@ -49,6 +49,54 @@ class ScriptedClient:
         )
 
 
+class TransientConnectionErrorIsRetried(unittest.TestCase):
+    """Regression for a measured crash (2026-10-04): a real network blip raised
+    anthropic.APIConnectionError mid-run and nothing caught it, crashing the
+    process after earlier tool calls had already made verified progress on a
+    live form. Bounded to 3 total attempts -- this project does not retry
+    unboundedly."""
+
+    class FlakyThenOkClient:
+        def __init__(self, fail_times, final_content):
+            import anthropic
+            self.fail_times = fail_times
+            self.final_content = final_content
+            self.calls = 0
+            self.messages = self
+
+        def create(self, **kwargs):
+            import anthropic
+            self.calls += 1
+            if self.calls <= self.fail_times:
+                raise anthropic.APIConnectionError(request=types.SimpleNamespace())
+            return types.SimpleNamespace(
+                content=self.final_content,
+                usage=types.SimpleNamespace(input_tokens=10, output_tokens=5),
+                stop_reason='end_turn')
+
+    class AlwaysFailsClient:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            import anthropic
+            raise anthropic.APIConnectionError(request=types.SimpleNamespace())
+
+    def test_succeeds_after_one_transient_failure(self):
+        client = self.FlakyThenOkClient(fail_times=1, final_content=[text_block('Recovered.')])
+        result = agent.run_agent('task', client=client, verbose=False, retry_backoff_seconds=0)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(client.calls, 2)
+
+    def test_gives_up_after_three_attempts_and_reports_connection_failed(self):
+        client = self.AlwaysFailsClient()
+        result = agent.run_agent('task', client=client, verbose=False, max_steps=5, retry_backoff_seconds=0)
+        self.assertEqual(result['status'], 'connection_failed')
+        self.assertIn('3 attempts', result['problem'])
+        # Must not have silently looped past the bound into a second API "step".
+        self.assertEqual(result['metrics']['api_calls'], 0)
+
+
 class CompletionIsNotAssumed(unittest.TestCase):
     """Silence from the model is not success. These guard requirement 3."""
 
