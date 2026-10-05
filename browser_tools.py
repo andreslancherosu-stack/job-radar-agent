@@ -242,6 +242,34 @@ def upload_document(run_key, selector, file_path, label='Upload'):
     }
 
 
+def verify_attachment(run_key, label_hint, expected_filename=None):
+    """Independently re-check ONE attachment widget's committed state, scoped
+    to its own container text -- separate from upload_document's own
+    immediately-after-write check, and able to run again later without
+    re-uploading.
+
+    Routes to apply.py's read_attachment_state (added 2026-10-04, read-only).
+    Closes a measured gap: a file input's browser-local C:\\fakepath\\... value
+    proves a file was SELECTED, never that the SERVER accepted it, and
+    inspect's page-text capture is capped at 3000 characters -- on a real
+    page where other content precedes the widget, that cap can structurally
+    never reach it. This tool checks the widget's own scoped text instead.
+    """
+    if not isinstance(label_hint, str) or not label_hint.strip():
+        raise ValueError('label_hint must be the attachment widget\'s own visible section text '
+                         '(e.g. "Resume"), not a CSS selector or input id')
+    err = _guard(run_key, needs_write=False)
+    if err:
+        raise ValueError(err)
+    command = {'cmd': 'read_attachment_state', 'label_hint': label_hint}
+    if expected_filename:
+        command['expected_filename'] = expected_filename
+    result, failed = _send(run_key, command)
+    if failed:
+        return result
+    return result
+
+
 def advance_to_next_page(run_key, button_label, expected_destination_text=None):
     """Click an INTERMEDIATE navigation control and confirm the page really moved.
 
@@ -324,6 +352,18 @@ TOOL_DEFINITIONS = [
          'run_key': _RUN_KEY, 'selector': {'type': 'string'},
          'file_path': {'type': 'string'}, 'label': {'type': 'string'}},
          'required': ['run_key', 'selector', 'file_path']}},
+    {'name': 'verify_attachment',
+     'description': 'Independently re-check whether an attachment (resume, cover letter) is actually '
+                    'committed, scoped to its own widget section text. ALWAYS call this after '
+                    'upload_document reports success, and whenever you need to re-confirm an attachment '
+                    'without re-uploading -- a file input\'s local C:\\\\fakepath\\\\... value proves a file '
+                    'was selected, never that the server accepted it.',
+     'input_schema': {'type': 'object', 'properties': {
+         'run_key': _RUN_KEY,
+         'label_hint': {'type': 'string', 'description': 'The widget\'s own visible section text, e.g. '
+                                                          '"Resume" -- never a CSS selector or input id.'},
+         'expected_filename': {'type': 'string', 'description': 'Filename to check for within the widget.'}},
+         'required': ['run_key', 'label_hint']}},
     {'name': 'advance_to_next_page',
      'description': 'Click an INTERMEDIATE navigation button (e.g. "Save and continue") and confirm the '
                     'page actually moved. Cannot submit an application; submit-like labels are refused.',
@@ -341,6 +381,7 @@ TOOL_REGISTRY = {
     'fill_application_fields': fill_application_fields,
     'answer_dropdown_question': answer_dropdown_question,
     'upload_document': upload_document,
+    'verify_attachment': verify_attachment,
     'advance_to_next_page': advance_to_next_page,
 }
 
