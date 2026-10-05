@@ -1138,6 +1138,30 @@ _UPLOAD_PENDING_LANGUAGE = re.compile(r'\b(uploading|upload in progress|please w
 
 _ATTACHMENT_TAG_ATTR = 'data-apply-attachment-index'
 
+DEFAULT_BODY_CHARS = 3000
+
+
+def body_window(body_text, offset=None, chars=None):
+    """Read-only slice of a page's body text, with honest truncation facts.
+
+    `inspect` used to return a silent `body_text[:3000]`. On any page where a
+    long job description precedes the thing you actually need -- a Select2
+    widget, an "Add employment" control, a sponsorship statement -- that cap
+    structurally cannot reach it, and the caller had no way to tell a short
+    page from a truncated one. Returning body_total/body_truncated alongside
+    the window is the point: a partial read must announce itself.
+    """
+    offset = max(0, int(offset or 0))
+    chars = int(chars or DEFAULT_BODY_CHARS)
+    if chars < 1:
+        chars = DEFAULT_BODY_CHARS
+    return {
+        'body_sample': body_text[offset:offset + chars],
+        'body_total': len(body_text),
+        'body_offset': offset,
+        'body_truncated': (offset + chars) < len(body_text),
+    }
+
 
 def find_attachment_container(page, label_hint, scope=None):
     """PREPARED, NOT YET DEPLOYED (written 2026-10-04; requires a worker
@@ -1542,7 +1566,17 @@ def _run_worker_locked(run_key, profile_path, start_url=None, headless=True, ans
                     elif cmd == 'inspect':
                         result['inspection'] = page.evaluate(_INSPECT_JS)
                         result['url'] = page.url
-                        result['body_sample'] = page.locator('body').inner_text()[:3000]
+                        # body_sample was hard-capped at the first 3000 chars,
+                        # which structurally cannot reach a widget (or the
+                        # "What You'll Need" / sponsorship section of a long
+                        # job posting) that sits below a long block of prose.
+                        # The window is now a read-only slice the caller
+                        # chooses, and body_total reports what was NOT shown
+                        # so a truncated read is never mistaken for the
+                        # whole page.
+                        result.update(body_window(page.locator('body').inner_text(),
+                                                   command.get('body_offset'),
+                                                   command.get('body_chars')))
                     elif cmd == 'read_fields':
                         # Read-only: reports each requested field's CURRENT
                         # live value (and, for a native <select>, its
@@ -2177,6 +2211,13 @@ def main():
     worker_send_cmd.add_argument('run_key')
     worker_send_cmd.add_argument('--cmd', required=True, choices=WORKER_COMMANDS)
     worker_send_cmd.add_argument('--url', default=None)
+    worker_send_cmd.add_argument('--body-chars', type=int, default=3000, help='For inspect: how many characters '
+                                  'of the page body text to return (default 3000). The reply also reports '
+                                  'body_total and body_truncated so a partial read is never mistaken for the '
+                                  'whole page.')
+    worker_send_cmd.add_argument('--body-offset', type=int, default=0, help='For inspect: start the body text '
+                                  'window at this character offset, to page through a long posting or a form '
+                                  'that sits below a long description.')
     worker_send_cmd.add_argument('--label', default='Next')
     worker_send_cmd.add_argument('--landmark', default=None)
     worker_send_cmd.add_argument('--reason', default='manual review/handoff')
@@ -2253,6 +2294,9 @@ def main():
         command = {'cmd': args.cmd}
         if args.cmd == 'goto':
             command['url'] = args.url
+        elif args.cmd == 'inspect':
+            command['body_chars'] = args.body_chars
+            command['body_offset'] = args.body_offset
         elif args.cmd == 'click_next':
             command['label'] = args.label
             if args.landmark:

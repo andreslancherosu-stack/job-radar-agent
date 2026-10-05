@@ -1559,5 +1559,43 @@ class QuestionContainerMappingRegression(unittest.TestCase):
             browser.close()
 
 
+class BodyWindowRegression(unittest.TestCase):
+    """inspect's body_sample used to be a silent body_text[:3000]. On a page
+    where a long job description precedes the form (CBRE, Bain), that cap
+    structurally cannot reach the part you need, and the caller could not
+    distinguish a short page from a truncated one."""
+
+    def test_default_window_matches_the_old_cap(self):
+        out = apply.body_window('x' * 5000)
+        self.assertEqual(len(out['body_sample']), 3000)
+        self.assertEqual(out['body_total'], 5000)
+        self.assertTrue(out['body_truncated'])
+
+    def test_offset_reaches_text_the_old_cap_could_not(self):
+        text = ('a' * 3000) + 'SPONSORSHIP STATEMENT'
+        self.assertNotIn('SPONSORSHIP', apply.body_window(text)['body_sample'])
+        out = apply.body_window(text, offset=3000, chars=100)
+        self.assertIn('SPONSORSHIP STATEMENT', out['body_sample'])
+        self.assertEqual(out['body_offset'], 3000)
+        self.assertFalse(out['body_truncated'])
+
+    def test_short_page_is_not_reported_as_truncated(self):
+        out = apply.body_window('short page')
+        self.assertFalse(out['body_truncated'])
+        self.assertEqual(out['body_sample'], 'short page')
+
+    def test_window_past_the_end_is_empty_not_an_error(self):
+        out = apply.body_window('abc', offset=100, chars=50)
+        self.assertEqual(out['body_sample'], '')
+        self.assertEqual(out['body_total'], 3)
+        self.assertFalse(out['body_truncated'])
+
+    def test_degenerate_arguments_fall_back_instead_of_returning_nothing(self):
+        for bad in (0, -5, None):
+            out = apply.body_window('y' * 4000, chars=bad)
+            self.assertEqual(len(out['body_sample']), 3000, 'chars=%r' % bad)
+        self.assertEqual(apply.body_window('y' * 10, offset=-3)['body_offset'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()
