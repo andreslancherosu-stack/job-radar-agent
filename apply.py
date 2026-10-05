@@ -698,8 +698,44 @@ def apply_step(page, step, profile, state, answer_bank=None):
                 for (let i = 0; i < 4 && node.parentElement; i++) node = node.parentElement;
                 return node;
             }''')
-        trigger = field.locator('..').get_by_role('button')
-        if trigger.count() > 0:
+        # Trigger discovery, widest-first-match. A file input's real
+        # user-facing trigger is very often a <label for="..."> styled as a
+        # button, NOT an element with role=button -- measured on Bain's
+        # Recruits Portal, where "From Device" is a label: the old
+        # parent-scoped role=button lookup found nothing, silently fell
+        # through to set_input_files(), and the page's own JS never ran, so
+        # its hidden "Continue" button (id=uploadFileResume) was never
+        # revealed and the application could not advance at all. The file
+        # sat staged in the DOM input looking plausible while nothing had
+        # actually been handed to the site.
+        # Order matters, and VISIBILITY matters more. A real widget often has
+        # BOTH a visible button and a visually-hidden <label for=...> kept
+        # only for screen readers (exactly what testapp/page_upload_widget
+        # .html reproduces from a real Greenhouse page) -- clicking that
+        # hidden label instead of the visible button arms nothing. So: take
+        # the first candidate that is actually VISIBLE, button first.
+        input_id = None
+        try:
+            input_id = field.get_attribute('id')
+        except Exception:
+            pass
+        # NOTE: get_by_role('button') is deliberately NOT used here. Chromium
+        # gives a bare <input type="file"> an implicit ARIA button role, so a
+        # role-based lookup matches the very input we are already holding and
+        # "triggers" itself -- which looks like it worked while never touching
+        # the page's own control. Match real elements instead.
+        candidates = [field.locator('..').locator('button, [role="button"]')]
+        if input_id:
+            candidates.append(page.locator('label[for="%s"]' % input_id))
+        trigger = None
+        for candidate in candidates:
+            try:
+                if candidate.count() > 0 and candidate.first.is_visible():
+                    trigger = candidate
+                    break
+            except Exception:
+                continue
+        if trigger is not None:
             # Real-user interaction: click the widget's own trigger and let
             # Playwright intercept the native file chooser, rather than
             # stuffing the (possibly JS-managed) hidden input directly —

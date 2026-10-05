@@ -960,6 +960,71 @@ class ScopedClickButtonRegression(unittest.TestCase):
             browser.close()
 
 
+class LabelTriggeredUploadRegression(unittest.TestCase):
+    """Measured live on Bain's Recruits Portal (req 10397, 2026-10-05).
+
+    The real upload trigger was a <label for="resumeFile"> styled as a
+    button -- NOT an element with role=button. The old trigger lookup only
+    searched the input's immediate parent for role=button, found nothing,
+    and silently fell through to set_input_files(). That stages the file in
+    the DOM (input.value becomes C:\\fakepath\\...) so it LOOKS plausible,
+    but the page's own change handler never ran, so its hidden Continue
+    button was never revealed and the application could not advance at all.
+
+    This fixture reproduces that exact shape: a label trigger, and a submit
+    button that starts hidden and is only revealed by the handler that runs
+    on a genuine file-chooser interaction."""
+
+    NOTE_ON_WHAT_THIS_CAN_PROVE = '''
+        Playwright's set_input_files() DOES fire input/change, so a fixture
+        that only listens for `change` is revealed by BOTH code paths and
+        proves nothing (verified directly before writing this test). What
+        actually distinguishes the paths is whether the page's own TRIGGER
+        was really clicked -- the old code never touched it. So that is what
+        is asserted here, via a click listener on the label.
+    '''
+
+    PAGE = '''
+        <label for="resumeFile" id="trigger">From Device</label>
+        <input type="file" id="resumeFile" name="resumeFile">
+        <script>
+          window.__triggerClicked = false;
+          document.getElementById('trigger').addEventListener('click', function () {
+            window.__triggerClicked = true;
+          });
+        </script>
+    '''
+
+    def _upload_and_report(self, pw, file_path):
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(self.PAGE)
+        step = {'action': 'upload', 'selector': '#resumeFile',
+                'label': 'From Device', 'value': file_path}
+        try:
+            apply.apply_step(page, step, {}, {'field_errors': [], 'action_log': []})
+        except RuntimeError:
+            # The verification half may still fail (this bare fixture renders
+            # no filename anywhere); the trigger question is what matters.
+            pass
+        clicked = page.evaluate('() => window.__triggerClicked === true')
+        staged = page.locator('#resumeFile').input_value()
+        browser.close()
+        return clicked, staged
+
+    def test_the_pages_own_label_trigger_is_actually_clicked(self):
+        from playwright.sync_api import sync_playwright
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / 'Andres_Lancheros_Resume.pdf'
+            f.write_bytes(b'%PDF-1.5 test')
+            with sync_playwright() as pw:
+                clicked, staged = self._upload_and_report(pw, str(f))
+        self.assertTrue(clicked,
+                        "the page's own <label for=...> trigger must be clicked so the site's handlers "
+                        'run; the previous code bypassed it entirely via set_input_files()')
+        self.assertIn('Andres_Lancheros_Resume.pdf', staged, 'the file must still end up staged')
+
+
 class ScopedAttachmentVerificationRegression(unittest.TestCase):
     """PREPARED CAPABILITY, not yet deployed to any live worker (added
     2026-10-04). Reproduces the exact measured gap on a real Momentum
