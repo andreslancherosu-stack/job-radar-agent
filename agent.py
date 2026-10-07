@@ -144,6 +144,48 @@ def api_key_is_real():
     return api_key_problem() is None
 
 
+# Matched against the API's own error message. Ordered most-specific first:
+# a billing failure is also a 400 BadRequestError, so classifying purely on
+# exception type would report "malformed request" for an empty wallet and
+# send the operator looking for a bug that does not exist.
+_API_STATUS_HINTS = (
+    ('credit balance is too low',
+     'The API key is valid but the Anthropic account is OUT OF CREDIT. Add credit or a payment method '
+     'at console.anthropic.com -> Plans & Billing, then re-run. Nothing was lost: no tool call was '
+     'issued on this step, and any live browser session this run was driving is still open and '
+     'unchanged.'),
+    ('rate limit',
+     'Rate limited beyond the bounded retries. Wait and re-run; do not loop retrying.'),
+    ('authentication',
+     'The API key was REJECTED. Check ANTHROPIC_API_KEY in .env -- it may be revoked, truncated, or '
+     'from a different account. The key value is never printed by this tool.'),
+    ('permission',
+     'The key authenticated but lacks permission for this request (model access or workspace scope). '
+     'Check the key\'s workspace and model permissions in the console.'),
+    ('not_found',
+     'The API rejected the request target -- most often an unrecognized model id. Verify the --model '
+     'value against the models your account can access.'),
+)
+
+
+def _api_status_guidance(exc):
+    """Turn an APIStatusError into something an operator can ACT on.
+
+    The raw SDK message is accurate but not actionable, and the exception
+    type alone is misleading (an exhausted balance arrives as a generic
+    BadRequestError). So match the message first, and fall back to the
+    status code only when nothing matches.
+    """
+    raw = str(getattr(exc, 'message', None) or exc)
+    low = raw.lower()
+    for needle, guidance in _API_STATUS_HINTS:
+        if needle in low:
+            return '%s (API said: %s)' % (guidance, raw)
+    status = getattr(exc, 'status_code', None)
+    return ('The Anthropic API refused this request with %s %s and retrying will not fix it. '
+            'API said: %s' % (status or 'an error', type(exc).__name__, raw))
+
+
 class Metrics:
     """Measured, not promised. Printed at the end of every run."""
 
@@ -243,13 +285,31 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
                     messages=messages,
                 )
                 break
-            except anthropic.APIConnectionError as e:
+            except (anthropic.APIConnectionError, anthropic.RateLimitError) as e:
+                # Both are genuinely transient: we either never reached the
+                # server, or were told to slow down. RateLimitError must be
+                # caught BEFORE APIStatusError below, since it is a subclass.
                 last_error = e
                 if attempt < 2:
                     if verbose:
-                        print('[step %d] connection error (attempt %d/3), retrying: %s'
-                              % (step, attempt + 1, e))
+                        print('[step %d] %s (attempt %d/3), retrying: %s'
+                              % (step, type(e).__name__, attempt + 1, e))
                     time.sleep(retry_backoff_seconds * (attempt + 1))
+            except anthropic.APIStatusError as e:
+                # Auth, billing, bad request, model-not-found, permissions.
+                # Retrying cannot fix any of these, so fail fast with an
+                # ACTIONABLE message instead of a traceback. This was a real
+                # measured failure: an exhausted credit balance surfaced as a
+                # raw anthropic.BadRequestError stack trace mid-run, which
+                # says nothing about what the operator should actually do,
+                # and buried the fact that the live browser session was
+                # still intact and nothing had been lost.
+                metrics.stop_reason = 'api_unavailable'
+                return {'status': 'api_unavailable',
+                        'problem': _api_status_guidance(e),
+                        'error_type': type(e).__name__,
+                        'http_status': getattr(e, 'status_code', None),
+                        'transcript': transcript, 'metrics': metrics.as_dict()}
         if response is None:
             metrics.stop_reason = 'connection_failed'
             return {'status': 'connection_failed',

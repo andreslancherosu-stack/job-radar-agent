@@ -341,5 +341,78 @@ class EvidenceGate(unittest.TestCase):
         self.assertIn('Evidence not found verbatim', observation['error'])
 
 
+class NonRetryableApiErrorFailsCleanly(unittest.TestCase):
+    """Regression for a measured crash (2026-10-06): the Anthropic account ran
+    out of credit mid-session and the resulting anthropic.BadRequestError
+    escaped as a raw traceback. The loop already documented that auth and
+    bad-request errors must NOT be retried, but had no handler, so the run
+    died without saying what to do or that the live browser session it was
+    driving was still intact."""
+
+    class StatusErrorClient:
+        def __init__(self, exc):
+            self.exc = exc
+            self.calls = 0
+            self.messages = self
+
+        def create(self, **kwargs):
+            self.calls += 1
+            raise self.exc
+
+    @staticmethod
+    def _status_error(cls, message, status):
+        import anthropic
+        exc = cls.__new__(cls)
+        Exception.__init__(exc, message)
+        exc.message = message
+        exc.status_code = status
+        return exc
+
+    def test_exhausted_credit_is_actionable_and_not_retried(self):
+        import anthropic
+        exc = self._status_error(anthropic.BadRequestError,
+                                 'Your credit balance is too low to access the Anthropic API.', 400)
+        client = self.StatusErrorClient(exc)
+        result = agent.run_agent('anything', client=client, verbose=False,
+                                 tool_definitions=[], tool_registry={})
+        self.assertEqual(result['status'], 'api_unavailable')
+        self.assertEqual(client.calls, 1, 'a billing failure must NOT be retried')
+        self.assertIn('OUT OF CREDIT', result['problem'])
+        self.assertIn('Plans & Billing', result['problem'])
+        self.assertIn('Nothing was lost', result['problem'])
+        self.assertEqual(result['error_type'], 'BadRequestError')
+
+    def test_auth_failure_never_echoes_the_key(self):
+        import anthropic
+        exc = self._status_error(anthropic.AuthenticationError,
+                                 'authentication_error: invalid x-api-key', 401)
+        result = agent.run_agent('anything', client=self.StatusErrorClient(exc), verbose=False,
+                                 tool_definitions=[], tool_registry={})
+        self.assertEqual(result['status'], 'api_unavailable')
+        self.assertIn('REJECTED', result['problem'])
+        self.assertNotIn('sk-ant', result['problem'])
+
+    def test_rate_limit_is_still_retried_because_it_is_transient(self):
+        """RateLimitError subclasses APIStatusError, so a careless except
+        ordering would turn a retryable 429 into an immediate hard failure."""
+        import anthropic
+        exc = self._status_error(anthropic.RateLimitError, 'rate limit exceeded', 429)
+        client = self.StatusErrorClient(exc)
+        result = agent.run_agent('anything', client=client, verbose=False,
+                                 tool_definitions=[], tool_registry={},
+                                 retry_backoff_seconds=0)
+        self.assertEqual(client.calls, 3, 'a 429 must exhaust the bounded retries')
+        self.assertEqual(result['status'], 'connection_failed')
+
+    def test_unclassified_status_error_still_returns_rather_than_crashes(self):
+        import anthropic
+        exc = self._status_error(anthropic.BadRequestError,
+                                 'messages.0.content.0: unexpected block', 400)
+        result = agent.run_agent('anything', client=self.StatusErrorClient(exc), verbose=False,
+                                 tool_definitions=[], tool_registry={})
+        self.assertEqual(result['status'], 'api_unavailable')
+        self.assertIn('unexpected block', result['problem'])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
