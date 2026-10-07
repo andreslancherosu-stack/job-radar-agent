@@ -1597,5 +1597,39 @@ class BodyWindowRegression(unittest.TestCase):
         self.assertEqual(apply.body_window('y' * 10, offset=-3)['body_offset'], 0)
 
 
+class BrowserClosedDuringHandoffRegression(unittest.TestCase):
+    """Measured crash (2026-10-05, Gartner req 112849): the worker was
+    paused at Workday step 1 for human sign-in, the browser window was
+    closed, and the idle poll's page.wait_for_timeout() raised
+    TargetClosedError. It escaped unhandled -- traceback, exit code 1, and
+    a stale lock file -- which is indistinguishable from a real engine
+    fault. Closing the window during a handoff is the single most likely
+    moment for this, since that is when a human is actually at the keyboard."""
+
+    def test_target_closed_is_recognized_by_class_name(self):
+        err = type('TargetClosedError', (Exception,), {})('anything at all')
+        self.assertTrue(apply._is_target_closed_error(err))
+
+    def test_target_closed_is_recognized_by_message_across_versions(self):
+        for msg in (
+            'Page.wait_for_timeout: Target page, context or browser has been closed',
+            'Browser has been closed',
+            'Target closed',
+        ):
+            self.assertTrue(apply._is_target_closed_error(Exception(msg)), msg)
+
+    def test_real_faults_still_propagate(self):
+        """The narrow part. A selector miss or strict-mode violation must NOT
+        be swallowed as "the human closed the window" -- that would convert
+        genuine targeting bugs into silent clean exits."""
+        for msg in (
+            'Timeout 30000ms exceeded waiting for locator("#nope")',
+            'strict mode violation: locator("a") resolved to 7 elements',
+            'Element is not visible',
+            'net::ERR_CONNECTION_REFUSED',
+        ):
+            self.assertFalse(apply._is_target_closed_error(Exception(msg)), msg)
+
+
 if __name__ == '__main__':
     unittest.main()

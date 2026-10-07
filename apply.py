@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error, sync_playwright
 
 import answers
 
@@ -1140,6 +1140,29 @@ _ATTACHMENT_TAG_ATTR = 'data-apply-attachment-index'
 
 DEFAULT_BODY_CHARS = 3000
 
+_TARGET_CLOSED_LANGUAGE = re.compile(
+    r'target page, context or browser has been closed'
+    r'|browser has been closed'
+    r'|target closed'
+    r'|browser closed',
+    re.IGNORECASE)
+
+
+def _is_target_closed_error(exc):
+    """True only for "the browser went away", not for any Playwright error.
+
+    Playwright signals this as TargetClosedError, a SUBCLASS of Error, but
+    the class is not re-exported from playwright.sync_api in every version,
+    so matching on the class name alone is not portable. Matching the
+    message too keeps this working across versions. Deliberately narrow: a
+    selector miss, a navigation failure, or a strict-mode violation must
+    still propagate as a real fault rather than be mistaken for a human
+    closing the window.
+    """
+    if type(exc).__name__ == 'TargetClosedError':
+        return True
+    return bool(_TARGET_CLOSED_LANGUAGE.search(str(exc)))
+
 
 def body_window(body_text, offset=None, chars=None):
     """Read-only slice of a page's body text, with honest truncation facts.
@@ -1526,7 +1549,31 @@ def _run_worker_locked(run_key, profile_path, start_url=None, headless=True, ans
         try:
             while True:
                 if not command_path.exists():
-                    page.wait_for_timeout(poll_seconds * 1000)
+                    try:
+                        page.wait_for_timeout(poll_seconds * 1000)
+                    except Error as e:
+                        # The human closed the browser window (or it
+                        # crashed) while the worker was idling -- which is
+                        # MOST likely during a `pause` handoff, exactly when
+                        # a person is sitting in front of the window and may
+                        # just close it when they're done or interrupted.
+                        # This used to escape as an unhandled
+                        # TargetClosedError traceback with exit code 1,
+                        # which looks identical to a real engine fault and
+                        # leaves a stale lock behind. It is neither a site
+                        # error nor a bug: record it as a distinct, honest
+                        # status and exit the loop cleanly so the lock is
+                        # released and the next run can be relaunched.
+                        if not _is_target_closed_error(e):
+                            raise
+                        state['status'] = 'browser_closed_during_handoff'
+                        state['issues'] = ['The browser window was closed while the worker was idle '
+                                            '(Playwright: %s). Nothing was submitted and no further '
+                                            'commands were run. Any form values that were never saved '
+                                            'server-side are gone -- re-inspect after relaunching rather '
+                                            'than assuming earlier edits survived.' % type(e).__name__]
+                        log_action(state, state['issues'][0])
+                        break
                     idle += poll_seconds
                     if idle >= idle_safety_cap_seconds:
                         state['status'] = 'handoff_safety_cap_reached'
