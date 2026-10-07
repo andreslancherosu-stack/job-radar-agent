@@ -1631,5 +1631,57 @@ class BrowserClosedDuringHandoffRegression(unittest.TestCase):
             self.assertFalse(apply._is_target_closed_error(Exception(msg)), msg)
 
 
+class NoResponseDiagnosisRegression(unittest.TestCase):
+    """A successful `pause` and a dead worker were indistinguishable from
+    the sender's side -- both a TimeoutError and exit code 1. That really
+    did cause a handoff to be reported as live after the browser had been
+    closed and the worker had crashed. The timeout must now name the case."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        patcher = mock.patch.object(apply, 'run_lock_path',
+                                    lambda key: self.root / ('%s.lock' % key))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _with_state(self, status):
+        return mock.patch.object(apply, 'load_run_state', lambda key: {'status': status})
+
+    def test_paused_worker_is_called_expected_and_warns_against_relaunch(self):
+        (self.root / 'r.lock').write_text('4242', encoding='utf-8')
+        with self._with_state('paused_for_review'):
+            msg = apply._no_response_diagnosis('r')
+        self.assertIn('EXPECTED', msg)
+        self.assertIn('Do not relaunch', msg)
+        self.assertIn('DID take effect', msg)
+
+    def test_missing_lock_is_reported_as_no_process(self):
+        with self._with_state('worker_running'):
+            msg = apply._no_response_diagnosis('r')
+        self.assertIn('NO worker process is running', msg)
+        self.assertNotIn('EXPECTED', msg)
+
+    def test_live_lock_without_pause_is_unknown_not_failure(self):
+        (self.root / 'r.lock').write_text('777', encoding='utf-8')
+        with self._with_state('worker_running'):
+            msg = apply._no_response_diagnosis('r')
+        self.assertIn('777', msg)
+        self.assertIn('UNKNOWN', msg)
+        self.assertIn('inspect', msg)
+        self.assertIn('do NOT retry', msg)
+
+    def test_never_raises_on_the_error_path(self):
+        """It runs while a TimeoutError is being constructed; if it threw it
+        would mask the original error."""
+        def boom(key):
+            raise RuntimeError('state file is corrupt')
+        with mock.patch.object(apply, 'load_run_state', boom):
+            msg = apply._no_response_diagnosis('r')
+        self.assertIsInstance(msg, str)
+        self.assertTrue(msg)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1469,6 +1469,51 @@ WORKER_COMMANDS = ('goto', 'inspect', 'read_fields', 'read_attachment_state', 'f
                     'fix_field_by_current_value', 'answer_question', 'click_next', 'pause', 'status', 'close')
 
 
+_PAUSE_IS_EXPECTED_TO_BLOCK = ('paused_for_review', 'awaiting_review')
+
+
+def _no_response_diagnosis(run_key):
+    """Explain WHY no result arrived, instead of only that none did.
+
+    A successful `pause` looks identical to a dead worker from the
+    sender's side: the worker blocks in wait_for_handoff_signal and writes
+    its result only after resume, so the sender always times out and exits
+    non-zero. That ambiguity already caused one real misreport (a handoff
+    was described as live after the browser had in fact been closed and the
+    worker had crashed), so the timeout now states which case it is rather
+    than leaving the reader to run four follow-up checks.
+
+    Read-only and best-effort: this runs on an error path, so it must never
+    raise and mask the original TimeoutError.
+    """
+    try:
+        status = (load_run_state(run_key) or {}).get('status')
+    except Exception:
+        status = None
+    lock = run_lock_path(run_key)
+    held_pid = None
+    try:
+        if lock.exists():
+            held_pid = lock.read_text(encoding='utf-8').strip()
+    except Exception:
+        held_pid = None
+
+    if status in _PAUSE_IS_EXPECTED_TO_BLOCK:
+        return ('This is EXPECTED, not a failure: run_state status is %r, so the worker is '
+                'deliberately blocked waiting for a human handoff and will not write a result '
+                'until it resumes. The pause DID take effect. Resume with `python apply.py resume %s` '
+                '(or create %s). Do not relaunch the worker -- it is still holding the browser '
+                'session.' % (status, run_key, resume_signal_path(run_key)))
+    if held_pid is None:
+        return ('No lock file is held, so NO worker process is running for this run_key -- it exited '
+                'or crashed. Check its log, then relaunch with `worker-start`. Status last recorded '
+                'was %r.' % (status,))
+    return ('A worker lock is held by PID %s and status is %r, so a process exists but did not answer '
+            'in time. Treat this as UNKNOWN, not failure: do NOT retry the same command blindly -- send '
+            '`inspect` to read the live page state first, since the command may have partly applied.'
+            % (held_pid, status))
+
+
 def send_worker_command(run_key, command, timeout_seconds=120, poll_seconds=0.5):
     """External API for driving an ALREADY-RUNNING run_worker process:
     writes a command file for it to pick up on its next poll, then waits
@@ -1493,8 +1538,8 @@ def send_worker_command(run_key, command, timeout_seconds=120, poll_seconds=0.5)
         time.sleep(poll_seconds)
         waited += poll_seconds
         if waited >= timeout_seconds:
-            raise TimeoutError('No response from the worker for run_key %r within %ss -- is it running? '
-                                'Check with `python apply.py worker-status %s`.' % (run_key, timeout_seconds, run_key))
+            raise TimeoutError('No response from the worker for run_key %r within %ss. %s'
+                                % (run_key, timeout_seconds, _no_response_diagnosis(run_key)))
     result = read_json(result_path)
     result_path.unlink(missing_ok=True)
     return result
