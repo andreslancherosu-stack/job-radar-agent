@@ -57,7 +57,11 @@ def verify(path):
     print('WORKBOOK: %s' % path)
     print('sheets  : %s' % wb.sheetnames)
 
-    cols, data = _table(wb['Selected'], 'Priority')
+    sheet = next((n for n in ('Prioritized for review', 'Selected') if n in wb.sheetnames), None)
+    if sheet is None:
+        print('  [FAIL] no shortlist sheet found')
+        return False
+    cols, data = _table(wb[sheet], 'Priority')
     reqs = [str(r[cols['Req ID']]) for r in data]
     urls = [r[cols['Official application URL']] for r in data]
 
@@ -96,7 +100,8 @@ def verify(path):
     chk('accumulated across searches', True, 'multi-search sources: %s' % (multi or 'none'))
     flat = {str(r[0]): r[1] for r in cs.iter_rows(values_only=True) if r and r[0]}
     scanned = flat.get('Listings scanned (titles seen)')
-    evaluated = flat.get('Postings fully evaluated (requirement text retrieved)')
+    evaluated = (flat.get('Postings with requirement text retrieved')
+                 or flat.get('Postings fully evaluated (requirement text retrieved)'))
     chk('scanned and evaluated are distinct', scanned != evaluated,
         'scanned=%s evaluated=%s' % (scanned, evaluated))
     chk('evaluated <= scanned', (evaluated or 0) <= (scanned or 0))

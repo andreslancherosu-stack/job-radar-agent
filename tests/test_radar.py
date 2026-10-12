@@ -212,9 +212,13 @@ class CacheBreakpointsStayUnderTheApiLimit(unittest.TestCase):
 
 class CostReportingIsHonest(unittest.TestCase):
     def test_known_model_is_priced(self):
+        # $5/MTok in + $25/MTok out, per the published table verified 2026-10-12.
+        # This asserted 90.0 while the configured rates were $15/$75 -- the test
+        # agreed with the code and both were wrong, which is why the rates are
+        # now pinned to the published source in their own test class.
         usd, note = agent.estimate_cost('claude-opus-5', 1_000_000, 1_000_000)
-        self.assertAlmostEqual(usd, 90.0)
-        self.assertIn('verify against console billing', note)
+        self.assertAlmostEqual(usd, 30.0)
+        self.assertIn('NOT a reading of the account invoice', note)
 
     def test_unknown_model_reads_as_unknown_not_zero(self):
         usd, note = agent.estimate_cost('some-future-model', 1000, 1000)
@@ -404,7 +408,7 @@ class ReportIsWrittenAndLabelled(unittest.TestCase):
             self.assertIn('_PARTIAL', out['report_path'])
             self.assertTrue(out['partial'])
             wb = openpyxl.load_workbook(out['report_path'])
-            rows = list(wb['Selected'].iter_rows(values_only=True))
+            rows = list(wb['Prioritized for review'].iter_rows(values_only=True))
             status = [r[1] for r in rows if r and r[0] == 'Run status'][0]
             self.assertIn('PARTIAL', status)
             self.assertIn('time_budget_exceeded', status)
@@ -635,7 +639,7 @@ class AvailabilityConflictsAreHeldBack(unittest.TestCase):
         cells = [str(c) for row in wb['Needs Verification'].iter_rows(values_only=True)
                  for c in row if c is not None]
         self.assertTrue(any('112849' in c for c in cells), 'must be kept, not dropped')
-        selected = [str(c) for row in wb['Selected'].iter_rows(values_only=True)
+        selected = [str(c) for row in wb['Prioritized for review'].iter_rows(values_only=True)
                     for c in row if c is not None]
         self.assertFalse(any('112849' in c for c in selected),
                          'must NOT appear on the application-ready sheet')
@@ -664,9 +668,213 @@ class AvailabilityConflictsAreHeldBack(unittest.TestCase):
     def test_scanned_and_evaluated_are_reported_as_different_numbers(self):
         radar_tools.RUN.details = {'gartner:1': {}, 'gartner:2': {}}
         out = radar_tools.export_report()
-        self.assertEqual(out['scanned'], 60)
-        self.assertEqual(out['fully_evaluated'], 2)
-        self.assertNotEqual(out['scanned'], out['fully_evaluated'])
+        # 'fully_evaluated' was renamed: retrieving a filtered requirement
+        # excerpt is not a complete evaluation, and the old key said it was.
+        self.assertEqual(out['listings_scanned'], 60)
+        self.assertEqual(out['postings_retrieved'], 2)
+        self.assertNotEqual(out['listings_scanned'], out['postings_retrieved'])
+
+
+class NumbersComeFromMetricsNotProse(unittest.TestCase):
+    """Measured on the 2026-10-12 08:14 run: the model's own export summary
+    said '184 postings scanned, 16 read in detail' while the tools had recorded
+    244 and 12 -- two contradictory sets of numbers inside one workbook."""
+
+    COUNTS = {'listings_scanned': 244, 'postings_retrieved': 12, 'excerpt_only': 12,
+              'full_text_retrieved': 0, 'judged_and_recorded': 4}
+
+    def test_the_real_contradiction_is_caught(self):
+        bad = radar_tools.contradicted_counts(
+            'Searched all five reachable employer APIs; 184 postings scanned, 16 read in '
+            'detail. Four selections recorded.', self.COUNTS)
+        self.assertEqual(len(bad), 2, bad)
+        self.assertTrue(any('184' in b and '244' in b for b in bad))
+        self.assertTrue(any('16' in b and '12' in b for b in bad))
+
+    def test_matching_numbers_are_not_flagged(self):
+        self.assertEqual(radar_tools.contradicted_counts(
+            '244 postings scanned, 12 read in detail.', self.COUNTS), [])
+
+    def test_prose_without_counts_is_fine(self):
+        self.assertEqual(radar_tools.contradicted_counts(
+            'Searched every reachable employer API and selected the strongest matches.',
+            self.COUNTS), [])
+
+    def test_contradiction_is_written_into_the_workbook(self):
+        import tempfile, openpyxl
+        radar_tools.reset_run()
+        radar_tools.RUN.coverage = [{'source': 's', 'company': 'S', 'ats': 'workday',
+                                     'reached': True, 'error': None, 'returned_by_source': 244,
+                                     'total_reported_by_source': 244, 'kept_after_filter': 10,
+                                     'searches': 1}]
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(radar_tools, 'REPORTS_DIR', Path(tmp)):
+                out = radar_tools.export_report(summary='184 postings scanned, 16 read in detail.')
+            cells = [str(c) for row in openpyxl.load_workbook(out['report_path'])
+                     [list(openpyxl.load_workbook(out['report_path']).sheetnames)[0]]
+                     .iter_rows(values_only=True) for c in row if c is not None]
+            self.assertTrue(any('CORRECTION' in c for c in cells),
+                            'a contradiction must be visible in the artefact')
+
+    def test_evaluation_counts_do_not_overclaim(self):
+        radar_tools.reset_run()
+        radar_tools.RUN.coverage = [{'source': 's', 'company': 'S', 'ats': 'w', 'reached': True,
+                                     'error': None, 'returned_by_source': 100,
+                                     'total_reported_by_source': 100, 'kept_after_filter': 9,
+                                     'searches': 1}]
+        radar_tools.RUN.details = {'a:1': {'requirement_lines': ['x']},      # excerpt only
+                                   'a:2': {'full_text': 'everything'}}      # full text
+        radar_tools.RUN.selections = [{'key': 'a:1'}]
+        c = radar_tools.RUN.evaluation_counts()
+        self.assertEqual(c['listings_scanned'], 100)
+        self.assertEqual(c['postings_retrieved'], 2)
+        self.assertEqual(c['excerpt_only'], 1)
+        self.assertEqual(c['full_text_retrieved'], 1)
+        self.assertEqual(c['judged_and_recorded'], 1,
+                         'retrieving an excerpt is not a judgment')
+
+
+class AvailabilityLabelsFollowTheEvidence(unittest.TestCase):
+    """Momentum rows were stamped availability_verified=true while their own
+    uncertainty text said acceptance was unconfirmed. Greenhouse exposes no
+    accept-applications flag at all, so a missing can_apply was being read as
+    confirmation. A missing flag is UNKNOWN."""
+
+    def test_greenhouse_missing_flag_is_unknown_not_confirmation(self):
+        ev = radar_tools.availability_evidence(
+            {'source': 'momentum', 'still_listed': True, 'can_apply': None})
+        self.assertFalse(ev['acceptance_confirmed'])
+        self.assertIn('does not expose', ev['evidence_note'])
+        self.assertIn('UNKNOWN', ev['evidence_note'])
+
+    def test_missing_flag_is_not_treated_as_closure_either(self):
+        ev = radar_tools.availability_evidence(
+            {'source': 'momentum', 'still_listed': True, 'can_apply': None})
+        self.assertTrue(ev['listed_at_retrieval'])
+        self.assertNotIn('closed', ev['evidence_note'].lower())
+
+    def test_workday_can_apply_is_not_an_acceptance_guarantee(self):
+        ev = radar_tools.availability_evidence(
+            {'source': 'gartner', 'still_listed': True, 'can_apply': True})
+        self.assertFalse(ev['acceptance_confirmed'])
+        self.assertIn('rendering an apply control', ev['evidence_note'])
+
+    def test_label_is_prioritized_for_review_not_application_ready(self):
+        import tempfile, openpyxl
+        radar_tools.reset_run()
+        radar_tools.RUN.coverage = [{'source': 's', 'company': 'S', 'ats': 'w', 'reached': True,
+                                     'error': None, 'returned_by_source': 5,
+                                     'total_reported_by_source': 5, 'kept_after_filter': 1,
+                                     'searches': 1}]
+        radar_tools.RUN.selections = [{
+            'key': 'a:1', 'company': 'A', 'title': 'T', 'job_id': '1', 'priority': 1,
+            'url': 'u', 'why_suitable': 'w', 'evidence_quote': 'q',
+            'unresolved_questions': ['sponsorship policy unknown'], 'next_action': 'n',
+            'posted': None, 'deadline_field': None, 'still_listed': True,
+            'availability_verified': True, 'verified_at': 'now',
+            'availability_evidence': radar_tools.availability_evidence(
+                {'source': 'momentum', 'still_listed': True, 'can_apply': None})}]
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(radar_tools, 'REPORTS_DIR', Path(tmp)):
+                out = radar_tools.export_report()
+            wb = openpyxl.load_workbook(out['report_path'])
+            self.assertIn('Prioritized for review', wb.sheetnames)
+            self.assertNotIn('Selected', wb.sheetnames)
+            cells = [str(c) for row in wb['Prioritized for review'].iter_rows(values_only=True)
+                     for c in row if c is not None]
+            self.assertTrue(any('NO -- not asserted by any source read' in c for c in cells))
+            self.assertTrue(any('not cleared to submit' in c for c in cells))
+        self.assertEqual(out['prioritized_for_review'], 1)
+
+
+class PricingIsVerifiedAgainstPublishedRates(unittest.TestCase):
+    """The configured rates were $15/$75 for Opus 5 -- carried over from an
+    older model and never checked. Published rates are $5/$25, so every cost
+    this project reported was overstated by exactly 3x."""
+
+    def test_opus_5_matches_the_published_table(self):
+        p = agent.PRICING_USD_PER_MTOK['claude-opus-5']
+        self.assertEqual(p['input'], 5.0)
+        self.assertEqual(p['output'], 25.0)
+        self.assertEqual(p['cache_write_5m'], 6.25)
+        self.assertEqual(p['cache_write_1h'], 10.0)
+        self.assertEqual(p['cache_read'], 0.50)
+
+    def test_cache_write_ttls_are_not_the_same_multiple(self):
+        p = agent.PRICING_USD_PER_MTOK['claude-opus-5']
+        self.assertNotEqual(p['cache_write_5m'] / p['input'],
+                            p['cache_write_1h'] / p['input'],
+                            'storing one multiplier would misprice one of the TTLs')
+
+    def test_each_category_is_billed_at_its_own_rate(self):
+        usd, _ = agent.estimate_cost('claude-opus-5', 1_000_000, 0)
+        self.assertAlmostEqual(usd, 5.0)
+        usd, _ = agent.estimate_cost('claude-opus-5', 0, 1_000_000)
+        self.assertAlmostEqual(usd, 25.0)
+        usd, _ = agent.estimate_cost('claude-opus-5', 0, 0, cache_write_tokens=1_000_000)
+        self.assertAlmostEqual(usd, 6.25)
+        usd, _ = agent.estimate_cost('claude-opus-5', 0, 0, cache_write_tokens=1_000_000,
+                                     cache_ttl='1h')
+        self.assertAlmostEqual(usd, 10.0)
+        usd, _ = agent.estimate_cost('claude-opus-5', 0, 0, cache_read_tokens=1_000_000)
+        self.assertAlmostEqual(usd, 0.50)
+
+    def test_note_names_its_source_and_stays_an_estimate(self):
+        _, note = agent.estimate_cost('claude-opus-5', 1, 1)
+        self.assertIn('ESTIMATE', note)
+        self.assertIn(agent.PRICING_VERIFIED_ON, note)
+        self.assertIn('platform.claude.com', note)
+        self.assertIn('NOT a reading of the account invoice', note)
+
+
+class SensitiveValuesStayOffTheProjector(unittest.TestCase):
+    """The trace is projected. get_confirmed_answers() returns voluntary EEO
+    answers and contact details that are irrelevant to job fit."""
+
+    def test_eeo_and_contact_values_are_redacted_in_the_display(self):
+        obs = {'confirmed_answers': [
+            {'question': 'Voluntary gender self-identification', 'answer': 'Male'},
+            {'question': 'Hispanic/Latino', 'answer': 'Yes'},
+            {'question': 'Protected veteran status', 'answer': 'I am not a protected veteran.'},
+            {'question': 'What is your cumulative GPA?', 'answer': '3.0-3.49'},
+        ]}
+        shown = agent._fmt_observation(obs, limit=100000)
+        for leaked in ('Male', '"Yes"', 'not a protected veteran', '3.0-3.49'):
+            self.assertNotIn(leaked, shown, 'leaked %r to the projector' % leaked)
+
+    def test_question_text_is_kept_so_the_observation_stays_useful(self):
+        obs = {'confirmed_answers': [
+            {'question': 'Protected veteran status', 'answer': 'I am not a protected veteran.'}]}
+        shown = agent._fmt_observation(obs, limit=100000)
+        self.assertIn('Protected veteran status', shown)
+        self.assertIn('redacted from display', shown)
+
+    def test_contact_fields_are_redacted_by_key(self):
+        obs = {'facts': {'email': 'someone@example.com', 'phone': '+1 555 0100',
+                         'address': '1 Main St', 'school': 'UT Dallas'}}
+        shown = agent._fmt_observation(obs, limit=100000)
+        self.assertNotIn('example.com', shown)
+        self.assertNotIn('555', shown)
+        self.assertNotIn('1 Main St', shown)
+        self.assertIn('UT Dallas', shown, 'non-sensitive facts must survive')
+
+    def test_the_model_still_receives_the_real_values(self):
+        obs = {'confirmed_answers': [{'question': 'Hispanic/Latino', 'answer': 'Yes'}]}
+        before = json.dumps(obs)
+        agent._fmt_observation(obs)
+        self.assertEqual(json.dumps(obs), before, 'redaction must not mutate the observation')
+
+
+class SponsorshipExclusionsAreRequisitionScoped(unittest.TestCase):
+    def test_coverage_limits_do_not_claim_a_company_wide_policy(self):
+        limits = ' '.join(radar_tools.list_sources()['coverage_limits'])
+        self.assertIn('RETRIEVAL reason, not a policy one', limits)
+        self.assertIn('requisition-level', limits)
+        self.assertNotIn('blocked by employer sponsorship policy', limits)
+
+    def test_absence_from_sources_is_not_exclusion(self):
+        limits = ' '.join(radar_tools.list_sources()['coverage_limits'])
+        self.assertIn("never 'ruled out'", limits)
 
 
 class RadarToolsetCannotTouchAForm(unittest.TestCase):

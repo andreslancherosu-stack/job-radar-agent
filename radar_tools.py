@@ -53,10 +53,32 @@ class Run:
         self.started = datetime.datetime.now()
 
     def scanned_count(self):
-        """Listings SEEN (titles returned by an employer API), summed across
-        every search. Deliberately distinct from len(self.details), which is
-        postings whose requirement text was actually retrieved and read."""
+        """Listings SEEN (title/location rows returned by an employer API),
+        summed across every search."""
         return sum(c.get('returned_by_source', 0) for c in self.coverage)
+
+    def evaluation_counts(self):
+        """Honest depth-of-work figures.
+
+        "Fully evaluated" was a misnomer and is gone. Retrieving a FILTERED
+        excerpt of requirement lines is not a complete assessment: the excerpt
+        is capped, drops lines, and says so itself. These three numbers are
+        different things and are reported as such:
+
+          excerpt_retrieved  requirement text pulled, but filtered and capped
+          full_text_retrieved the entire posting was pulled
+          judged             the model actually formed a recorded judgment
+                             (i.e. selected it); a posting it read and silently
+                             passed over is NOT counted as judged
+        """
+        full = sum(1 for d in self.details.values() if d.get('full_text') is not None)
+        return {
+            'listings_scanned': self.scanned_count(),
+            'postings_retrieved': len(self.details),
+            'excerpt_only': len(self.details) - full,
+            'full_text_retrieved': full,
+            'judged_and_recorded': len(self.selections),
+        }
 
     def key(self, row):
         return '%s:%s' % (row.get('source'), row.get('job_id'))
@@ -106,6 +128,49 @@ def availability_conflict(key):
     except Exception:
         return None
     return (data.get('conflicts') or {}).get(key)
+
+
+_COUNT_CLAIM = re.compile(
+    r'(\d[\d,]{1,6})\s*(?:\+\s*)?'
+    r'(?:postings?|listings?|roles?|jobs?|openings?|results?)?\s*'
+    r'(scanned|searched|read in detail|read in full|reviewed|evaluated|assessed|detailed)',
+    re.IGNORECASE)
+
+
+def contradicted_counts(summary, counts):
+    """Count-claims in the model's prose that disagree with recorded metrics.
+
+    Measured on the 2026-10-12 08:14 run: the model's own summary said
+    "184 postings scanned, 16 read in detail" while the tools had recorded 244
+    scanned and 12 retrieved -- two contradictory sets of numbers inside the
+    same workbook. Prose is not a measurement. The recorded metrics are
+    authoritative, and any disagreement is surfaced in the report rather than
+    left for a reader to trip over.
+    """
+    if not summary:
+        return []
+    allowed = {int(v) for v in counts.values() if isinstance(v, int)}
+    problems = []
+    for m in _COUNT_CLAIM.finditer(summary):
+        try:
+            claimed = int(m.group(1).replace(',', ''))
+        except ValueError:
+            continue
+        if claimed in allowed:
+            continue
+        verb = m.group(2).lower()
+        if verb in ('scanned', 'searched'):
+            truth = 'listings scanned = %d' % counts['listings_scanned']
+        elif verb in ('read in full',):
+            truth = 'full text retrieved = %d' % counts['full_text_retrieved']
+        elif verb in ('assessed', 'evaluated', 'reviewed'):
+            truth = ('judged and recorded = %d (requirement text retrieved for %d)'
+                     % (counts['judged_and_recorded'], counts['postings_retrieved']))
+        else:
+            truth = 'postings with requirement text retrieved = %d' % counts['postings_retrieved']
+        problems.append('narrative claims %s %s; recorded metric is %s'
+                        % (m.group(1), verb, truth))
+    return problems
 
 
 def _today():
@@ -288,6 +353,7 @@ def select_opportunity(key, priority, why_suitable, evidence_quote,
            'still_listed': d.get('still_listed'), 'can_apply': d.get('can_apply'),
            'availability_verified': conflict is None,
            'availability_note': (conflict or {}).get('why_unresolved'),
+           'availability_evidence': availability_evidence(d),
            'verified_at': datetime.datetime.now().isoformat(timespec='seconds')}
     RUN.selections.append(sel)
     out = {'recorded': True, 'key': key, 'selections_so_far': len(RUN.selections),
@@ -303,10 +369,51 @@ def select_opportunity(key, priority, why_suitable, evidence_quote,
     return out
 
 
-def application_ready(selections=None):
-    """Shortlist rows whose availability is established. Only these are opened."""
+def availability_evidence(detail):
+    """What the SOURCE actually said about this requisition being open.
+
+    Previously every row that lacked a recorded conflict was stamped
+    availability_verified=true, which overstated the evidence in two ways at
+    once. Greenhouse exposes no accept-applications flag at all, so a missing
+    can_apply was being read as confirmation; and Workday's canApply only
+    means it is rendering an apply control. Neither is the employer asserting
+    that it is still taking candidates. A missing flag is UNKNOWN -- it is
+    neither proof of closure nor proof of acceptance.
+    """
+    source = (detail or {}).get('source') or ''
+    can_apply = (detail or {}).get('can_apply')
+    listed = (detail or {}).get('still_listed')
+    if source in ('momentum', 'elixirr') or (detail or {}).get('ats') == 'greenhouse':
+        flag = ('This source (Greenhouse) does not expose an accept-applications flag. '
+                'Absence of one is UNKNOWN, not closure and not acceptance.')
+    elif can_apply is True:
+        flag = ('Workday reports canApply=true, which means it is rendering an apply control -- '
+                'not that the employer confirmed it is still taking candidates.')
+    elif can_apply is False:
+        flag = 'Workday reports canApply=false.'
+    else:
+        flag = 'No accept-applications flag was returned by this source.'
+    return {'listed_at_retrieval': bool(listed),
+            'accept_flag_reported': can_apply,
+            'acceptance_confirmed': False,          # no source we read ever asserts this
+            'evidence_note': flag}
+
+
+def prioritized_for_review(selections=None):
+    """Shortlist rows with no recorded availability CONFLICT.
+
+    Deliberately NOT called "application-ready". Every row here still carries
+    unresolved fit or eligibility questions -- that is why the unresolved
+    column exists -- and no source we read confirms the employer is still
+    accepting candidates. These are worth the candidate's attention next;
+    they are not cleared to submit.
+    """
     return [s for s in (selections if selections is not None else RUN.selections)
             if s.get('availability_verified', True)]
+
+
+# Kept so existing callers and tests keep working; the honest name is above.
+application_ready = prioritized_for_review
 
 
 def needs_verification(selections=None):
@@ -329,27 +436,44 @@ def export_report(summary=None, partial=False, partial_reason=None):
     wrap = Alignment(wrap_text=True, vertical='top')
 
     ws = wb.active
-    ws.title = 'Selected'
+    ws.title = 'Prioritized for review'
     status = ('PARTIAL -- %s' % (partial_reason or 'run ended before completing')) if partial \
         else 'COMPLETE'
-    ws.append(['Job Radar - selected opportunities'])
+    ws.append(['Job Radar - opportunities prioritized for review'])
     ws['A1'].font = bold
     ws.append(['Generated', RUN.started.strftime('%Y-%m-%d %H:%M:%S')])
     ws.append(['Run status', status])
-    ws.append(['Application-ready selections', len(application_ready())])
+    counts = RUN.evaluation_counts()
+    ws.append(['Prioritized for review', len(application_ready())])
     ws.append(['Held in Needs Verification', len(needs_verification())])
-    ws.append(['Postings scanned (listings seen)', RUN.scanned_count()])
-    ws.append(['Postings fully evaluated (requirement text read)', len(RUN.details)])
+    ws.append(['RUN FACTS BELOW ARE FROM RECORDED METRICS', 'not from model prose'])
+    ws.append(['Listings scanned (title rows returned)', counts['listings_scanned']])
+    ws.append(['Postings with requirement text retrieved', counts['postings_retrieved']])
+    ws.append(['  of those, excerpt only (filtered, capped)', counts['excerpt_only']])
+    ws.append(['  of those, full text retrieved', counts['full_text_retrieved']])
+    ws.append(['Judged and recorded (selected)', counts['judged_and_recorded']])
+    ws.append(['NOTE', 'Retrieving a filtered requirement excerpt is NOT a complete assessment. '
+                       'Only the "judged and recorded" figure reflects a decision the model '
+                       'actually made and defended with evidence.'])
     ws.append(['Evaluation basis',
-               'Live retrieval from official employer APIs during this run. Listing by an '
-               'employer API is not confirmation that a vacancy accepts new applicants.'])
+               'Live retrieval from official employer APIs during this run. Being listed is NOT '
+               'confirmation that a vacancy accepts new applicants, and no source read here '
+               'asserts that. Every row below still has unresolved fit or eligibility questions '
+               '-- these are prioritized for YOUR review, not cleared to submit.'])
     if summary:
-        ws.append(['Model summary', summary])
+        ws.append(['Model narrative', summary])
+        bad = contradicted_counts(summary, counts)
+        if bad:
+            ws.append(['CORRECTION -- model narrative contradicts recorded metrics',
+                       '; '.join(bad)])
+            for c in ws[ws.max_row]:
+                c.font = bold
     ws.append([])
     head = ['Priority', 'Company', 'Title', 'Req ID', 'Location', 'Why suitable (model)',
             'Evidence (verbatim from posting)', 'Unresolved questions', 'Next action',
-            'Posted', 'Deadline field', 'Still listed', 'Verified at (run clock)',
-            'Official application URL']
+            'Posted', 'Deadline field', 'Listed at retrieval',
+            'Acceptance confirmed by source?', 'Source availability evidence',
+            'Verified at (run clock)', 'Official application URL']
     ws.append(head)
     for c in ws[ws.max_row]:
         c.font = bold
@@ -358,9 +482,12 @@ def export_report(summary=None, partial=False, partial_reason=None):
                    s.get('location'), s.get('why_suitable'), s.get('evidence_quote'),
                    '; '.join(s.get('unresolved_questions') or []) or 'none stated',
                    s.get('next_action'), str(s.get('posted') or ''),
-                   str(s.get('deadline_field') or ''), str(s.get('still_listed')),
+                   str(s.get('deadline_field') or ''),
+                   str((s.get('availability_evidence') or {}).get('listed_at_retrieval')),
+                   'NO -- not asserted by any source read',
+                   (s.get('availability_evidence') or {}).get('evidence_note') or '',
                    s.get('verified_at') or '', s.get('url')])
-    for col, width in zip('ABCDEFGHIJKLMN', (9, 14, 34, 11, 20, 52, 58, 40, 34, 16, 14, 12, 20, 56)):
+    for col, width in zip('ABCDEFGHIJKLMNOP', (9, 14, 34, 11, 20, 52, 58, 40, 34, 16, 14, 12, 16, 54, 20, 56)):
         ws.column_dimensions[col].width = width
     for row in ws.iter_rows(min_row=8):
         for c in row:
@@ -441,9 +568,13 @@ def export_report(summary=None, partial=False, partial_reason=None):
     wb.save(path)
     RUN.report_path = str(path)
     return {'report_path': str(path),
-            'application_ready': len(application_ready()),
+            'prioritized_for_review': len(prioritized_for_review()),
+            'application_ready': len(prioritized_for_review()),
             'needs_verification': len(needs_verification()),
-            'scanned': RUN.scanned_count(), 'fully_evaluated': len(RUN.details),
+            'listings_scanned': RUN.scanned_count(),
+            'postings_retrieved': len(RUN.details),
+            'scanned': RUN.scanned_count(),          # legacy key, kept for callers
+
             'selections': len(RUN.selections),
             'status': status, 'partial': bool(partial),
             'sources_reached': sum(1 for c in RUN.coverage if c['reached']),
@@ -586,7 +717,12 @@ def verify_export_matches_open_set(report_path=None):
     if not path.exists():
         return {'ok': False, 'error': 'no workbook at %s' % path}
     wb = openpyxl.load_workbook(path)
-    ws = wb['Selected']
+    # Sheet was renamed from 'Selected' to 'Prioritized for review' -- accept
+    # either so a report generated before the rename still verifies.
+    sheet = next((n for n in ('Prioritized for review', 'Selected') if n in wb.sheetnames), None)
+    if sheet is None:
+        return {'ok': False, 'error': 'no shortlist sheet in %s' % path}
+    ws = wb[sheet]
     rows = list(ws.iter_rows(values_only=True))
     header_idx = next((i for i, r in enumerate(rows) if r and r[0] == 'Priority'), None)
     if header_idx is None:

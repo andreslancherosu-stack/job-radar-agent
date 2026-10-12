@@ -153,10 +153,10 @@ Four complete runs, no cherry-picking: **133s, 154s, 160s, 186s**. Final rehears
 | API requests / retries | 12 / 0 |
 | Tool calls / failures | 21 / 0 |
 | Listings scanned | 364 |
-| Postings fully evaluated | 10 |
-| Application-ready | 3 |
+| Requirement text retrieved | 10 (excerpt-only) |
+| Prioritized for review | 3 |
 | Needs Verification | 1 |
-| Estimated cost | $2.16 |
+| Estimated cost (list price) | $0.72 |
 
 Usage, separately: **219 uncached input**, **37,896 cache creation**, **291,196 cache read**,
 **13,438 output** -- 329,311 input tokens billed in total. Caching changes the rate, not the

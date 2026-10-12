@@ -56,16 +56,41 @@
     }
   ],
   "probed_and_rejected": [
-    {"target": "costar / External / wd1", "result": "HTTP 404", "note": "CoStar's public feed is Eightfold, not Workday; its own registry entry also records a requisition-level no-sponsorship blocker."},
-    {"target": "marriott / MarriottUS / wd1", "result": "HTTP 422", "note": "Wrong site id; a correct one may exist and was not pursued."},
-    {"target": "hilton / Hilton / wd1", "result": "HTTP 422", "note": "Wrong site id; a correct one may exist and was not pursued."},
-    {"target": "cushwake / Cushman_Wakefield / wd1", "result": "HTTP 422", "note": "Wrong site id; a correct one may exist and was not pursued."},
-    {"target": "nielseniq / NIQ / wd3", "result": "HTTP 401", "note": "Requires authentication."},
-    {"target": "palantir, zillow (greenhouse)", "result": "HTTP 404", "note": "Not on Greenhouse under those board tokens."}
+    {
+      "target": "costar / External / wd1",
+      "result": "HTTP 404",
+      "note": "CoStar's public feed is Eightfold, not Workday, so this Workday probe was always going to 404. A correct Eightfold probe was not attempted. No company-wide conclusion is drawn from this."
+    },
+    {
+      "target": "marriott / MarriottUS / wd1",
+      "result": "HTTP 422",
+      "note": "Wrong site id; a correct one may exist and was not pursued."
+    },
+    {
+      "target": "hilton / Hilton / wd1",
+      "result": "HTTP 422",
+      "note": "Wrong site id; a correct one may exist and was not pursued."
+    },
+    {
+      "target": "cushwake / Cushman_Wakefield / wd1",
+      "result": "HTTP 422",
+      "note": "Wrong site id; a correct one may exist and was not pursued."
+    },
+    {
+      "target": "nielseniq / NIQ / wd3",
+      "result": "HTTP 401",
+      "note": "Requires authentication."
+    },
+    {
+      "target": "palantir, zillow (greenhouse)",
+      "result": "HTTP 404",
+      "note": "Not on Greenhouse under those board tokens."
+    }
   ],
   "known_coverage_limits": [
     "Five employers is NOT the 51-company priority list. Any report generated from this file covers these five only, and says so explicitly.",
-    "CBRE (Taleo) and CoStar (Eightfold) are deliberately absent: both are recorded in company_registry.json as blocked by employer sponsorship policy against the user's confirmed future_sponsorship_required=true.",
-    "A 422/404 above means THIS probe's site id was wrong, not that the employer has no official feed. These are unfinished leads, not proof of absence."
+    "CBRE and CoStar are absent for a RETRIEVAL reason, not a policy one: no supported official feed was established for them here. CBRE serves JavaScript-rendered pages behind Taleo, and CoStar publishes through Eightfold; neither has a working probe in this file. Sponsorship language observed on individual requisitions is requisition-level evidence and is NOT a company-wide policy -- do not treat either employer as excluded.",
+    "A 422/404 in probed_and_rejected means THIS probe's site id or protocol was wrong, not that the employer has no official feed. These are unfinished leads, not proof of absence.",
+    "Only employers with a working, verified probe appear in `sources`. Absence from this file means 'not wired up yet', never 'ruled out'."
   ]
 }

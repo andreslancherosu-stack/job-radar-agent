@@ -26,6 +26,7 @@ Python 3.10+.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -186,38 +187,59 @@ def _api_status_guidance(exc):
             'API said: %s' % (status or 'an error', type(exc).__name__, raw))
 
 
-# List prices in USD per million tokens. These are an ASSUMPTION stated in
-# the open, not a reading of the account's invoice: the printed dollar figure
-# is an estimate to be checked against console billing, while the token counts
-# beside it come from the API's own usage block and are exact.
+# Published list prices in USD per million tokens, per usage category.
+#
+# VERIFIED 2026-10-12 against the official pricing table at
+# platform.claude.com/docs/en/about-claude/pricing. The previous values were
+# WRONG BY 3x in both directions ($15/$75 for Opus 5 instead of $5/$25), which
+# overstated every cost this project has reported. They were carried over from
+# an older model's rates and never checked -- so they are now recorded with the
+# date and source they were verified against, and each category is stored
+# explicitly rather than derived from a multiplier, because the published 5m
+# and 1h cache-write rates are NOT the same multiple of base input.
+#
+# This remains an ESTIMATE of list price, not a reading of the account's
+# invoice. Token counts beside it come from the API's usage block and are exact.
+PRICING_VERIFIED_ON = '2026-10-12'
+PRICING_SOURCE = 'platform.claude.com/docs/en/about-claude/pricing'
+
 PRICING_USD_PER_MTOK = {
-    'claude-opus-5': {'input': 15.0, 'output': 75.0},
-    'claude-sonnet-5': {'input': 3.0, 'output': 15.0},
-    'claude-haiku-4-5-20251001': {'input': 1.0, 'output': 5.0},
+    #                       input  cache_write_5m  cache_write_1h  cache_read  output
+    'claude-opus-5':       {'input': 5.0,  'cache_write_5m': 6.25,  'cache_write_1h': 10.0,
+                            'cache_read': 0.50, 'output': 25.0},
+    'claude-opus-4-8':     {'input': 5.0,  'cache_write_5m': 6.25,  'cache_write_1h': 10.0,
+                            'cache_read': 0.50, 'output': 25.0},
+    'claude-sonnet-5':     {'input': 2.0,  'cache_write_5m': 2.50,  'cache_write_1h': 4.0,
+                            'cache_read': 0.20, 'output': 10.0},
+    'claude-haiku-4-5-20251001': {'input': 1.0, 'cache_write_5m': 1.25, 'cache_write_1h': 2.0,
+                                  'cache_read': 0.10, 'output': 5.0},
 }
 
 
-# Prompt-cache multipliers against the base input price: a write costs more
-# than a fresh token, a read costs far less. Billing them at the plain input
-# rate would overstate a cached run's cost by roughly an order of magnitude.
-CACHE_WRITE_MULTIPLIER = 1.25
-CACHE_READ_MULTIPLIER = 0.1
-
-
-def estimate_cost(model, input_tokens, output_tokens, cache_write_tokens=0, cache_read_tokens=0):
+def estimate_cost(model, input_tokens, output_tokens, cache_write_tokens=0, cache_read_tokens=0,
+                  cache_ttl='5m'):
     """(usd, pricing_note). usd is None when the model's price is unknown --
-    an unknown price must read as unknown, never as $0.00."""
+    an unknown price must read as unknown, never as $0.00.
+
+    Cache writes are billed at the TTL's own published rate. This run uses
+    ephemeral (5-minute) cache control, so the 5m column applies; the 1h rate
+    is a different number, not the same multiple of base input.
+    """
     price = PRICING_USD_PER_MTOK.get(model)
     if price is None:
-        return None, 'no list price recorded for %r; token counts are exact, cost is not shown' % model
+        return None, ('no list price recorded for %r; token counts are exact, cost is not shown'
+                      % model)
+    write_rate = price['cache_write_1h' if cache_ttl == '1h' else 'cache_write_5m']
     usd = ((input_tokens / 1e6) * price['input']
            + (output_tokens / 1e6) * price['output']
-           + (cache_write_tokens / 1e6) * price['input'] * CACHE_WRITE_MULTIPLIER
-           + (cache_read_tokens / 1e6) * price['input'] * CACHE_READ_MULTIPLIER)
-    return usd, ('estimated at list price %s: $%.2f/Mtok in, $%.2f/Mtok out, cache write x%.2f, '
-                 'cache read x%.2f (verify against console billing)'
-                 % (model, price['input'], price['output'],
-                    CACHE_WRITE_MULTIPLIER, CACHE_READ_MULTIPLIER))
+           + (cache_write_tokens / 1e6) * write_rate
+           + (cache_read_tokens / 1e6) * price['cache_read'])
+    return usd, ('ESTIMATE at published list price for %s, verified %s against %s: '
+                 '$%.2f/MTok input, $%.2f/MTok %s cache write, $%.2f/MTok cache read, '
+                 '$%.2f/MTok output. This is list price, NOT a reading of the account invoice -- '
+                 'actual billing may differ.'
+                 % (model, PRICING_VERIFIED_ON, PRICING_SOURCE, price['input'], write_rate,
+                    cache_ttl, price['cache_read'], price['output']))
 
 
 def _fmt_args(d, limit=150):
@@ -233,10 +255,57 @@ def _fmt_args(d, limit=150):
     return ', '.join(parts)
 
 
-def _fmt_observation(obs, limit=1100):
+# Keys and question-text whose VALUE must never appear on a projected screen.
+# Two separate concerns, both real: contact details identify the candidate to a
+# room, and voluntary EEO answers (gender, ethnicity, veteran status,
+# disability) are both sensitive and irrelevant to job fit -- they exist only
+# to answer employer forms truthfully and must never leak into a demonstration.
+_SENSITIVE_KEY = re.compile(
+    r'email|phone|mobile|address|street|postal|zip|city_line|dob|birth|ssn|'
+    r'national_id|passport|gender|sex|hispanic|latino|ethnic|race|veteran|'
+    r'disability|gpa|salary|compensation|linkedin|github_url',
+    re.IGNORECASE)
+
+_REDACTED = '[redacted from display -- the model received the real value]'
+
+
+def _redact_for_display(value, _key=''):
+    """Display-only redaction. NEVER applied to what is sent to the model.
+
+    Keeps the shape and the field names, because an observation whose keys are
+    visible still demonstrates what the tool returned -- it is only the values
+    that must not be projected. A redaction announces itself rather than
+    silently dropping the field, so the trace does not look like the tool
+    failed to return anything.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if isinstance(v, (str, int, float)) and _SENSITIVE_KEY.search(str(k)):
+                out[k] = _REDACTED
+            elif k in ('question', 'label', 'name') and isinstance(v, str):
+                out[k] = v                      # the prompt is fine; the answer is not
+            else:
+                out[k] = _redact_for_display(v, k)
+        # answer-bank shape: {'question': ..., 'answer': ...}
+        q = out.get('question')
+        if isinstance(q, str) and _SENSITIVE_KEY.search(q):
+            for field in ('answer', 'source'):
+                if field in out:
+                    out[field] = _REDACTED
+        return out
+    if isinstance(value, list):
+        return [_redact_for_display(v, _key) for v in value]
+    if isinstance(value, str) and _SENSITIVE_KEY.search(_key):
+        return _REDACTED
+    return value
+
+
+def _fmt_observation(obs, limit=1100, redact=True):
     """Compact, readable observation for the trace. Clipping is ANNOUNCED --
     a silently truncated observation would misrepresent what the model saw."""
-    text = json.dumps(obs, ensure_ascii=False, indent=1, default=str)
+    shown = _redact_for_display(obs) if redact else obs
+    text = json.dumps(shown, ensure_ascii=False, indent=1, default=str)
     if len(text) <= limit:
         return text
     return text[:limit] + ('\n ...<trace display clipped at %d of %d chars; the MODEL received '
@@ -845,9 +914,10 @@ def main():
         # are both weaker than looking.
         path = Path(run.report_path) if run.report_path else None
         exists = bool(path and path.exists())
-        ready = radar_tools.application_ready()
+        ready = radar_tools.prioritized_for_review()
         held = radar_tools.needs_verification()
-        print('\nAPPLICATION-READY (%d):' % len(ready))
+        print('\nPRIORITIZED FOR REVIEW (%d) -- open questions remain; NOT cleared to submit:'
+              % len(ready))
         for s in sorted(ready, key=lambda x: str(x.get('priority'))):
             print('  %s. %s -- %s [%s]' % (s.get('priority'), s.get('company'),
                                            s.get('title'), s.get('job_id')))
@@ -867,8 +937,16 @@ def main():
                   % (c['source'], c['company'] or '', 'yes' if c['reached'] else 'NO',
                      c['returned_by_source'], c['kept_after_filter'],
                      '  ERROR: %s' % c['error'] if c.get('error') else ''))
-        print('\nCOUNTS: %d listings scanned | %d postings fully evaluated (requirement text read)'
-              % (run.scanned_count(), len(run.details)))
+        counts = run.evaluation_counts()
+        print('\nCOUNTS (from recorded metrics, not from model prose):')
+        print('  listings scanned (title rows)      : %d' % counts['listings_scanned'])
+        print('  requirement text retrieved         : %d  (%d excerpt-only, %d full text)'
+              % (counts['postings_retrieved'], counts['excerpt_only'],
+                 counts['full_text_retrieved']))
+        print('  judged and recorded                : %d' % counts['judged_and_recorded'])
+        print('  note: a filtered requirement excerpt is NOT a complete assessment.')
+        for bad in radar_tools.contradicted_counts(result.get('final_text'), counts):
+            print('  !! NARRATIVE CONTRADICTS METRICS: %s' % bad)
         print('\nREPORT: %s' % (run.report_path or 'NOT WRITTEN'))
         print('  exists on disk: %s%s' % (exists,
               ' (%d bytes)' % path.stat().st_size if exists else ''))
@@ -902,7 +980,7 @@ def main():
         print('  output tokens           : %s' % format(m['output_tokens'], ','))
         print('  total input billed      : %s  (uncached + creation + read)'
               % format(m['input_tokens'] + m['cache_write_tokens'] + m['cache_read_tokens'], ','))
-        print('  estimated cost          : %s'
+        print('  ESTIMATED cost (list)   : %s'
               % ('$%.4f' % m['estimated_cost_usd'] if m['estimated_cost_usd'] is not None
                  else 'unknown'))
         print('  rates                   : %s' % m['pricing_note'])

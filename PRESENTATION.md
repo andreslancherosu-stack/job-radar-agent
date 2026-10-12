@@ -42,7 +42,7 @@ The 180-second budget is checked *before* each API call, so the final call can f
 
 **2. Limits are enforced, not promised.** 25 iterations, 180s checked before each call, 10s network timeouts, no retry loops. Hit either ceiling and you get a workbook named `_PARTIAL`, stamped `PARTIAL` inside, and a non-zero exit.
 
-**3. Scanned ≠ evaluated.** 364 listings were *seen*; 10 postings had their requirement text *retrieved and read*. The report prints both, separately, because conflating them would overstate the work.
+**3. Scanned ≠ retrieved ≠ judged.** 364 listings were *seen*; 10 had a **filtered requirement excerpt** retrieved; 4 were actually *judged and recorded*. All three are printed separately, because an excerpt is not a complete assessment and conflating them overstates the work.
 
 **4. An OS handoff is not a loaded page.** The run reports `os_handoff_accepted=True`, which means the operating system accepted the request — not that the employer's page rendered or that the role is still open.
 
@@ -57,12 +57,12 @@ The 180-second budget is checked *before* each API call, so the final call can f
 | API requests / retries | 12 / 0 |
 | Tool calls / failures | 21 / 0 |
 | Listings scanned | 364 |
-| Postings fully evaluated | 10 |
-| Application-ready | 3 |
+| Requirement text retrieved | 10 (excerpt-only) |
+| Prioritized for review | 3 |
 | Needs Verification | 1 (Gartner 112849) |
 | Browser open requests | 0 — already open from earlier today; `--force-open` gives 3 |
 
-**Usage, all four categories separate:**
+**Usage, all four categories separate** (rates verified 2026-10-12 against the published pricing table):
 
 | | tokens |
 |---|---|
@@ -71,9 +71,11 @@ The 180-second budget is checked *before* each API call, so the final call can f
 | Cache read input | 291,196 |
 | **Total input billed** | **329,311** |
 | Output | 13,438 |
-| **Estimated cost** | **$2.16** |
+| **Estimated cost (list price)** | **$0.72** |
 
-Say "219 uncached input tokens" — never "219 input tokens". The run bills 329,311 input tokens in total; caching changes the *rate*, not the volume. Rates are list price and the run prints that assumption.
+Say "219 **uncached** input tokens" — never "219 input tokens". The run bills 329,311 input tokens in total; caching changes the *rate*, not the volume.
+
+The configured rates were wrong until 2026-10-12: $15/$75 per MTok, carried over from an older model. Published Opus 5 rates are **$5 input / $25 output**, with 5-minute cache writes at $6.25 and cache reads at $0.50. Every cost previously reported here was overstated by exactly 3×. The figure is a **list-price estimate**, not a reading of the account invoice.
 
 Test suite: **76 radar + agent tests**, full suite **193+**, all passing.
 
