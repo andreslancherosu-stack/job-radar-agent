@@ -6,7 +6,7 @@ One command. Real API calls. The model chooses the tools; Python does the facts.
 py agent.py radar --task "Review these job opportunities against my verified profile. Tell me which I should prioritize, which require clarification, and which I should skip. Explain the evidence and avoid duplicate applications."
 ```
 
-Runs independently of any chat session. Add `--no-open` to skip opening browser tabs.
+Runs independently of any chat session. `--no-open` skips tabs entirely; `--force-open` re-opens pages already opened earlier today (needed if you rehearse and present on the same day). Verify the artefact afterwards with `py verify_report.py`.
 
 ---
 
@@ -26,7 +26,7 @@ your task  ->  model decides which tool to call
                  |
             (repeat, max 25)
                  v
-        dated Excel report  +  browser tabs opened
+        dated Excel report  +  up to 4 application pages opened
 ```
 
 Six deterministic tools do the work; the model does the judging.
@@ -144,9 +144,7 @@ Prompt caching matters here: every step resends the whole conversation, so cost 
 
 ## 6. Measured runs
 
-Two consecutive end-to-end runs, no cherry-picking:
-
-Four complete runs: **133s, 154s, 160s, 186s**. Final rehearsal:
+Four complete runs, no cherry-picking: **133s, 154s, 160s, 186s**. Final rehearsal:
 
 | | |
 |---|---|
