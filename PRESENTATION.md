@@ -31,7 +31,7 @@ The 180-second budget is checked *before* each API call, so the final call can f
 | **1:20–2:00** | `check_application_history` | **The moment.** "Watch — it asked with only a company name. The tool refused: *identity must not be guessed*. Next step it came back with explicit requisition ids. The observation changed its next action." |
 | **2:00–2:45** | `select_opportunity`, `export_report` | "Every selection carries a quote checked character-for-character. Requisitions I already applied to are refused as duplicates, against my real ledger." |
 | **2:45–3:10** | `NEEDS VERIFICATION`, tabs open, `FINAL ANSWER` | "Gartner 112849 advertised an October 9 deadline. It is still listed with that sentence removed. That might be a repost — it is not proof. So it is kept and reported, but excluded from the shortlist and **no tab opens for it**." |
-| **3:10–4:10** | Scroll to coverage, counts, usage | Numbers below. Open the workbook — three sheets. |
+| **3:10–4:10** | Scroll to coverage, counts, usage | Numbers below. Open the workbook — three sheets. Note the trace shows `[redacted from display]` where contact and voluntary EEO answers would be: "the model got the real values; the projector does not." |
 | **4:10–5:00** | Questions | Fall back to the limits list. |
 
 ---
@@ -77,7 +77,7 @@ Say "219 **uncached** input tokens" — never "219 input tokens". The run bills 
 
 The configured rates were wrong until 2026-10-12: $15/$75 per MTok, carried over from an older model. Published Opus 5 rates are **$5 input / $25 output**, with 5-minute cache writes at $6.25 and cache reads at $0.50. Every cost previously reported here was overstated by exactly 3×. The figure is a **list-price estimate**, not a reading of the account invoice.
 
-Test suite: **76 radar + agent tests**, full suite **193+**, all passing.
+Test suite: **230 tests, all passing.**
 
 ---
 
