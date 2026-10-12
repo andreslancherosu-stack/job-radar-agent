@@ -1,0 +1,34 @@
+{
+  "_note": "Requisitions whose CURRENT availability cannot be established from official evidence, because two official observations of the same requisition disagree. A requisition listed here is still a legitimate opportunity and keeps its assessment -- it is excluded from the APPLICATION-READY shortlist and routed to Needs Verification instead, so no browser tab is opened for something that may have closed. Removing an entry requires new official evidence, not the passage of time. Contains no personal data: these are observations of public postings.",
+  "schema_version": 1,
+  "conflicts": {
+    "gartner:112849": {
+      "company": "Gartner",
+      "title": "Data Analyst - 2026/2027 graduates",
+      "job_id": "112849",
+      "classification": "availability_unverified",
+      "observations": [
+        {
+          "observed_on": "2026-10-05",
+          "source": "jobs.gartner.com posting body (rendered, 12,834 chars)",
+          "evidence": "Application Deadline: October 9th, 2026"
+        },
+        {
+          "observed_on": "2026-10-05",
+          "source": "gartner.wd5.myworkdayjobs.com requisition page",
+          "evidence": "End Date: October 10, 2026 (4 days left to apply)"
+        },
+        {
+          "observed_on": "2026-10-11",
+          "source": "Workday CXS API jobPostingInfo for req 112849",
+          "evidence": "startDate=2026-10-10, endDate=null, posted=true, canApply=true, and the 'Application Deadline: October 9th, 2026' sentence is NO LONGER PRESENT in the job description."
+        }
+      ],
+      "why_unresolved": "The October 9 deadline passed. The requisition is still listed, its stated deadline has been removed from the body, and startDate is now the day AFTER the previously advertised end date. That pattern is consistent with the requisition having been reposted -- but a changed startDate is not proof of reopening, and canApply=true reflects that Workday is rendering an apply control, not that the employer is accepting new applicants for this cycle. No official statement of a new deadline or a new cycle was found.",
+      "excluded_from": "application_ready_shortlist",
+      "kept_in": "needs_verification",
+      "how_to_resolve": "Ask Gartner recruiting directly whether req 112849 is open for a new application, or watch for a restated application deadline on the posting. Do NOT infer reopening from startDate alone.",
+      "do_not": "Do not modify the application history for this requisition. No application was ever submitted to it; the prepared Workday session stopped at step 1 of 5 (sign-in) and remains paused."
+    }
+  }
+}

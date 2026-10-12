@@ -670,6 +670,16 @@ willingness or an immediate start date.
 DUPLICATES: selecting a requisition already in the ledger is a defect. The tool blocks it; do not
 fight the block, pick something else.
 
+AVAILABILITY: if select_opportunity returns availability_verified=false, that requisition has
+official evidence disagreeing with itself about whether it still accepts applicants. It is KEPT
+and reported under Needs Verification, but it is NOT application-ready and no tab will open for
+it. Do not argue with that, do not re-select it, and SAY so plainly in your closing summary --
+naming the requisition and why it is unresolved. Then select another opportunity if a slot remains.
+
+FINISHING: call export_report once, then open_application_urls once. open_application_urls opens
+only application-ready rows, at most four, and is idempotent -- calling it twice opens nothing the
+second time. Do not call it before export_report has succeeded.
+
 FINISH by stating your prioritised decisions with evidence, what remains unresolved, what you could
 not cover, and where the report was saved."""
 
@@ -734,6 +744,10 @@ def main():
     radar.add_argument('--env-file', default='.env')
     radar.add_argument('--no-open', action='store_true',
                        help='Do everything except actually opening browser tabs.')
+    radar.add_argument('--force-open', action='store_true',
+                       help='Re-open application pages even if they were already opened earlier '
+                            'today. Use this if you rehearsed this morning and want fresh tabs '
+                            'for the live demonstration.')
     radar.add_argument('--json', action='store_true')
 
     args = parser.parse_args()
@@ -756,9 +770,16 @@ def main():
         import radar_tools
         radar_tools.reset_run()
         if args.no_open:
-            radar_tools.TOOL_REGISTRY['open_application_urls'] = lambda keys=None: {
-                'opened': [], 'opened_count': 0,
+            radar_tools.TOOL_REGISTRY['open_application_urls'] = lambda keys=None, force=False: {
+                'requested': [], 'requested_count': 0,
                 'note': 'Opening suppressed by --no-open; the URLs are in the report.'}
+        elif args.force_open:
+            # Same-day idempotency is the right default, but it makes a second
+            # rehearsal open nothing -- which is confusing in front of an
+            # audience. This is the explicit opt-out the user asks for.
+            _open = radar_tools.open_application_urls
+            radar_tools.TOOL_REGISTRY['open_application_urls'] = (
+                lambda keys=None, force=False: _open(keys=keys, force=True))
         task = build_radar_task(args.max_steps, args.time_budget, args.task)
         definitions, registry = build_toolset('radar')
         # "The model stopped talking" is not success. This run is only done if
@@ -824,23 +845,70 @@ def main():
         # are both weaker than looking.
         path = Path(run.report_path) if run.report_path else None
         exists = bool(path and path.exists())
-        print('\nSELECTED (%d):' % len(run.selections))
-        for s in sorted(run.selections, key=lambda x: str(x.get('priority'))):
+        ready = radar_tools.application_ready()
+        held = radar_tools.needs_verification()
+        print('\nAPPLICATION-READY (%d):' % len(ready))
+        for s in sorted(ready, key=lambda x: str(x.get('priority'))):
             print('  %s. %s -- %s [%s]' % (s.get('priority'), s.get('company'),
                                            s.get('title'), s.get('job_id')))
             print('     %s' % s.get('url'))
             for q in (s.get('unresolved_questions') or []):
                 print('     ? %s' % q)
+        if held:
+            print('\nNEEDS VERIFICATION (%d) -- assessed, but NOT application-ready, no tab opened:'
+                  % len(held))
+            for s in held:
+                print('  %s -- %s [%s]' % (s.get('company'), s.get('title'), s.get('job_id')))
+                print('     why: %s' % (s.get('availability_note') or 'availability unverified'))
+
         print('\nSEARCH COVERAGE (what was actually reached):')
         for c in run.coverage:
             print('  %-11s %-12s reached=%-3s scanned=%-4s kept=%s%s'
                   % (c['source'], c['company'] or '', 'yes' if c['reached'] else 'NO',
                      c['returned_by_source'], c['kept_after_filter'],
                      '  ERROR: %s' % c['error'] if c.get('error') else ''))
+        print('\nCOUNTS: %d listings scanned | %d postings fully evaluated (requirement text read)'
+              % (run.scanned_count(), len(run.details)))
         print('\nREPORT: %s' % (run.report_path or 'NOT WRITTEN'))
-        print('  verified on disk: %s%s' % (exists,
+        print('  exists on disk: %s%s' % (exists,
               ' (%d bytes)' % path.stat().st_size if exists else ''))
-        print('OPENED TABS: %d' % len(run.opened_urls))
+
+        # Size proves nothing. Read the workbook back and require that its rows
+        # and the URLs we actually requested agree EXACTLY, or say they do not.
+        if exists:
+            check = radar_tools.verify_export_matches_open_set()
+            print('  workbook rows: %d  requisitions: %s'
+                  % (check.get('workbook_rows', 0), check.get('workbook_requisitions')))
+            already = check.get('urls_already_open_from_earlier_today') or []
+            print('  rows match pages requested to open: %s%s'
+                  % (check.get('exact_agreement'),
+                     '  (%d already open from earlier today)' % len(already) if already else ''))
+            for problem in check.get('problems') or []:
+                print('  !! %s' % problem)
+            if not check.get('ok'):
+                print('  !! CONTENT CHECK FAILED -- this run must not be reported as complete.')
+
+        print('\nBROWSER OPEN REQUESTS: %d (cap %d)'
+              % (len(run.opened_urls), radar_tools.MAX_SELECTIONS))
+        for e in run.opened_urls:
+            print('  %s  os_handoff_accepted=%s' % (e['url'], e.get('os_handoff_accepted')))
+        print('  note: an accepted OS handoff is not proof the page loaded.')
+
+        m = result['metrics']
+        print('\nAPI USAGE (all four input categories are separate):')
+        print('  uncached input tokens   : %s' % format(m['input_tokens'], ','))
+        print('  cache CREATION input    : %s' % format(m['cache_write_tokens'], ','))
+        print('  cache READ input        : %s' % format(m['cache_read_tokens'], ','))
+        print('  output tokens           : %s' % format(m['output_tokens'], ','))
+        print('  total input billed      : %s  (uncached + creation + read)'
+              % format(m['input_tokens'] + m['cache_write_tokens'] + m['cache_read_tokens'], ','))
+        print('  estimated cost          : %s'
+              % ('$%.4f' % m['estimated_cost_usd'] if m['estimated_cost_usd'] is not None
+                 else 'unknown'))
+        print('  rates                   : %s' % m['pricing_note'])
+        print('  API requests %d (loop iterations %d, retries %d) | tool calls %d (failures %d)'
+              % (m['api_requests'], m['api_calls'], m['api_retries'], m['tool_calls'],
+                 m['tool_failures']))
 
     print('\nmetrics: %s' % json.dumps(result['metrics']))
     # A run that did not achieve its outcome must not look like a success to a

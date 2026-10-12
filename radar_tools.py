@@ -27,6 +27,7 @@ import discovery
 import tools as core_tools
 
 REPORTS_DIR = Path('private/reports')
+CONFLICTS_PATH = Path('availability_conflicts.json')
 
 MAX_SELECTIONS = 4
 
@@ -48,7 +49,14 @@ class Run:
         self.searches = 0
         self.report_path = None
         self.opened_urls = []
+        self.opened_set = set()   # urls already REQUESTED this run (idempotency)
         self.started = datetime.datetime.now()
+
+    def scanned_count(self):
+        """Listings SEEN (titles returned by an employer API), summed across
+        every search. Deliberately distinct from len(self.details), which is
+        postings whose requirement text was actually retrieved and read."""
+        return sum(c.get('returned_by_source', 0) for c in self.coverage)
 
     def key(self, row):
         return '%s:%s' % (row.get('source'), row.get('job_id'))
@@ -83,6 +91,21 @@ def reset_run():
     global RUN
     RUN = Run()
     return RUN
+
+
+def availability_conflict(key):
+    """Official evidence that disagrees with itself about whether a
+    requisition currently accepts applicants, or None.
+
+    Deterministic and file-driven, so the exclusion is enforced by code rather
+    than by remembering to mention it. Resolving one needs NEW evidence, not
+    elapsed time.
+    """
+    try:
+        data = json.loads(CONFLICTS_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    return (data.get('conflicts') or {}).get(key)
 
 
 def _today():
@@ -249,17 +272,46 @@ def select_opportunity(key, priority, why_suitable, evidence_quote,
         return {'error': 'DUPLICATE: the ledger already records an application to %s (%s). Do '
                          'not select it.' % (key, hist.get('application_record'))}
 
+    # Availability conflicts route to Needs Verification rather than being
+    # dropped. The assessment is still real work and the opportunity may well
+    # be live -- what is NOT established is whether it currently accepts
+    # applicants, and opening a tab for a possibly-closed requisition presents
+    # it as actionable when it is not.
+    conflict = availability_conflict(key)
+
     sel = {'key': key, 'company': d.get('company'), 'title': d.get('title'),
            'job_id': d.get('job_id'), 'location': d.get('location'), 'url': d.get('url'),
            'priority': priority, 'why_suitable': why_suitable, 'evidence_quote': quote,
            'unresolved_questions': unresolved_questions or [],
            'next_action': next_action,
            'posted': d.get('updated'), 'deadline_field': d.get('deadline_field'),
-           'still_listed': d.get('still_listed'), 'can_apply': d.get('can_apply')}
+           'still_listed': d.get('still_listed'), 'can_apply': d.get('can_apply'),
+           'availability_verified': conflict is None,
+           'availability_note': (conflict or {}).get('why_unresolved'),
+           'verified_at': datetime.datetime.now().isoformat(timespec='seconds')}
     RUN.selections.append(sel)
-    return {'recorded': True, 'key': key, 'selections_so_far': len(RUN.selections),
-            'remaining_slots': MAX_SELECTIONS - len(RUN.selections),
-            'duplicate_check': 'passed -- not in the canonical ledger'}
+    out = {'recorded': True, 'key': key, 'selections_so_far': len(RUN.selections),
+           'remaining_slots': MAX_SELECTIONS - len(RUN.selections),
+           'duplicate_check': 'passed -- not in the canonical ledger',
+           'availability_verified': conflict is None}
+    if conflict:
+        out['routed_to'] = 'needs_verification'
+        out['warning'] = (
+            'AVAILABILITY UNVERIFIED for %s: %s This selection is KEPT and reported, but it is '
+            'excluded from the application-ready shortlist and NO browser tab will be opened for '
+            'it. Say so in your summary.' % (key, conflict.get('why_unresolved')))
+    return out
+
+
+def application_ready(selections=None):
+    """Shortlist rows whose availability is established. Only these are opened."""
+    return [s for s in (selections if selections is not None else RUN.selections)
+            if s.get('availability_verified', True)]
+
+
+def needs_verification(selections=None):
+    return [s for s in (selections if selections is not None else RUN.selections)
+            if not s.get('availability_verified', True)]
 
 
 def export_report(summary=None, partial=False, partial_reason=None):
@@ -284,7 +336,10 @@ def export_report(summary=None, partial=False, partial_reason=None):
     ws['A1'].font = bold
     ws.append(['Generated', RUN.started.strftime('%Y-%m-%d %H:%M:%S')])
     ws.append(['Run status', status])
-    ws.append(['Selections', len(RUN.selections)])
+    ws.append(['Application-ready selections', len(application_ready())])
+    ws.append(['Held in Needs Verification', len(needs_verification())])
+    ws.append(['Postings scanned (listings seen)', RUN.scanned_count()])
+    ws.append(['Postings fully evaluated (requirement text read)', len(RUN.details)])
     ws.append(['Evaluation basis',
                'Live retrieval from official employer APIs during this run. Listing by an '
                'employer API is not confirmation that a vacancy accepts new applicants.'])
@@ -293,20 +348,64 @@ def export_report(summary=None, partial=False, partial_reason=None):
     ws.append([])
     head = ['Priority', 'Company', 'Title', 'Req ID', 'Location', 'Why suitable (model)',
             'Evidence (verbatim from posting)', 'Unresolved questions', 'Next action',
-            'Posted', 'Deadline field', 'Still listed', 'Official application URL']
+            'Posted', 'Deadline field', 'Still listed', 'Verified at (run clock)',
+            'Official application URL']
     ws.append(head)
     for c in ws[ws.max_row]:
         c.font = bold
-    for s in sorted(RUN.selections, key=lambda x: str(x.get('priority'))):
+    for s in sorted(application_ready(), key=lambda x: str(x.get('priority'))):
         ws.append([s.get('priority'), s.get('company'), s.get('title'), s.get('job_id'),
                    s.get('location'), s.get('why_suitable'), s.get('evidence_quote'),
                    '; '.join(s.get('unresolved_questions') or []) or 'none stated',
                    s.get('next_action'), str(s.get('posted') or ''),
                    str(s.get('deadline_field') or ''), str(s.get('still_listed')),
-                   s.get('url')])
-    for col, width in zip('ABCDEFGHIJKLM', (9, 14, 34, 11, 20, 52, 58, 40, 34, 16, 14, 12, 56)):
+                   s.get('verified_at') or '', s.get('url')])
+    for col, width in zip('ABCDEFGHIJKLMN', (9, 14, 34, 11, 20, 52, 58, 40, 34, 16, 14, 12, 20, 56)):
         ws.column_dimensions[col].width = width
     for row in ws.iter_rows(min_row=8):
+        for c in row:
+            c.alignment = wrap
+
+    nv = wb.create_sheet('Needs Verification')
+    nv.append(['Assessed, but NOT application-ready'])
+    nv['A1'].font = bold
+    nv.append(['These requisitions were evaluated and may well be real opportunities. What is '
+               'NOT established is whether they currently accept applicants, so no browser tab '
+               'was opened for them. Resolving one needs new official evidence.'])
+    nv.append([])
+    nv.append(['Company', 'Title', 'Req ID', 'Why availability is unverified',
+               'Unresolved questions', 'How to resolve', 'Official URL'])
+    for c in nv[nv.max_row]:
+        c.font = bold
+    # Two populations, deliberately. (a) selections the model made that were
+    # held back, and (b) requisitions with a KNOWN availability conflict that
+    # this run encountered as candidates but did not select. Without (b) the
+    # record would vanish from the report on any run where the model happened
+    # not to pick it -- and "keep its record in Needs Verification" has to
+    # survive the model's choices, not depend on them.
+    listed = set()
+    for s_ in needs_verification():
+        conflict = availability_conflict(s_['key']) or {}
+        listed.add(s_['key'])
+        nv.append([s_.get('company'), s_.get('title'), s_.get('job_id'),
+                   s_.get('availability_note') or conflict.get('why_unresolved'),
+                   '; '.join(s_.get('unresolved_questions') or []) or 'none stated',
+                   conflict.get('how_to_resolve') or '', s_.get('url')])
+    for key, row in RUN.candidates.items():
+        if key in listed:
+            continue
+        conflict = availability_conflict(key)
+        if not conflict:
+            continue
+        nv.append([conflict.get('company') or row.get('company'),
+                   conflict.get('title') or row.get('title'),
+                   conflict.get('job_id') or row.get('job_id'),
+                   conflict.get('why_unresolved'),
+                   'not selected this run; held on availability grounds',
+                   conflict.get('how_to_resolve') or '', row.get('url')])
+    for col, width in zip('ABCDEFG', (14, 34, 11, 70, 46, 54, 56)):
+        nv.column_dimensions[col].width = width
+    for row in nv.iter_rows(min_row=4):
         for c in row:
             c.alignment = wrap
 
@@ -314,54 +413,229 @@ def export_report(summary=None, partial=False, partial_reason=None):
     cs.append(['What this run ACTUALLY searched'])
     cs['A1'].font = bold
     cs.append(['Searches run', RUN.searches])
+    cs.append(['Listings scanned (titles seen)', RUN.scanned_count()])
+    cs.append(['Postings fully evaluated (requirement text retrieved)', len(RUN.details)])
+    cs.append(['NOTE', 'A scanned listing is a title/location row returned by an employer API. '
+                       'A fully evaluated posting is one whose requirement text was actually '
+                       'retrieved and read. They are different numbers and are reported separately.'])
     cs.append([])
-    cs.append(['Source', 'Company', 'ATS', 'Reached', 'Error', 'Returned', 'Total reported',
-               'Kept after keyword/location filter'])
+    cs.append(['Source', 'Company', 'ATS', 'Reached', 'Error', 'Searches',
+               'Listings scanned', 'Total reported by source',
+               'Kept after keyword/location filter', 'Fully evaluated'])
     for c in cs[cs.max_row]:
         c.font = bold
     for c in RUN.coverage:
+        evaluated = sum(1 for k in RUN.details if k.startswith(c['source'] + ':'))
         cs.append([c['source'], c['company'], c['ats'], 'yes' if c['reached'] else 'NO',
-                   c.get('error') or '', c['returned_by_source'],
-                   c.get('total_reported_by_source'), c['kept_after_filter']])
+                   c.get('error') or '', c.get('searches', 1), c['returned_by_source'],
+                   c.get('total_reported_by_source'), c['kept_after_filter'], evaluated])
     cs.append([])
     _, raw = discovery.load_sources()
     cs.append(['Documented coverage limits'])
     cs[cs.max_row][0].font = bold
     for lim in raw.get('known_coverage_limits', []):
         cs.append([lim])
-    for col, width in zip('ABCDEFGH', (14, 16, 12, 9, 26, 10, 14, 30)):
+    for col, width in zip('ABCDEFGHIJ', (14, 16, 12, 9, 26, 10, 16, 20, 30, 14)):
         cs.column_dimensions[col].width = width
 
     wb.save(path)
     RUN.report_path = str(path)
-    return {'report_path': str(path), 'selections': len(RUN.selections),
+    return {'report_path': str(path),
+            'application_ready': len(application_ready()),
+            'needs_verification': len(needs_verification()),
+            'scanned': RUN.scanned_count(), 'fully_evaluated': len(RUN.details),
+            'selections': len(RUN.selections),
             'status': status, 'partial': bool(partial),
             'sources_reached': sum(1 for c in RUN.coverage if c['reached']),
             'sources_total': len(RUN.coverage),
             'verify': 'File written and closed. Re-read it to confirm contents.'}
 
 
-def open_application_urls(keys=None):
-    """Open the official application URLs for the user. Opens pages only --
-    it cannot fill or submit anything."""
-    sel = RUN.selections if not keys else [s for s in RUN.selections if s['key'] in keys]
-    if not sel:
+def open_ledger_path(day=None):
+    """Where today's already-requested URLs are remembered, so reruns on the
+    same day do not reopen what is already sitting in the browser."""
+    return REPORTS_DIR / ('opened_urls_%s.json' % (day or _today()))
+
+
+def _load_open_ledger(day=None):
+    p = open_ledger_path(day)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        return {}                       # a corrupt ledger must not block the run
+
+
+def _save_open_ledger(data, day=None):
+    p = open_ledger_path(day)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
+
+
+def open_application_urls(keys=None, force=False):
+    """Request the official application pages for the FINAL shortlist.
+
+    Four properties this enforces, each of which was absent and each of which
+    a rerun or a retry would otherwise violate:
+
+      * It runs only AFTER export_report wrote a workbook that exists on disk.
+        Opening tabs for a shortlist that was never exported would put pages
+        in front of the user that no artefact records.
+      * It opens at most MAX_SELECTIONS unique URLs, and only URLs belonging
+        to the exported shortlist -- never a candidate, never a retrieval.
+      * It is idempotent within the run and across the day. Calling it twice,
+        or retrying finalisation, re-requests nothing. A same-day rerun skips
+        what is already open unless force=True.
+      * It reports what was REQUESTED, not what loaded. webbrowser returning
+        True means the OS accepted a handoff; it is not evidence the employer's
+        page rendered, or that the requisition is still live.
+    """
+    if not RUN.report_path or not Path(RUN.report_path).exists():
+        return {'error': 'refusing to open anything: the shortlist has not been exported yet. '
+                         'Call export_report first and let it succeed -- pages must never be '
+                         'opened for a shortlist that no workbook records.'}
+    if not RUN.selections:
         return {'error': 'nothing selected to open'}
-    opened, failed = [], []
+
+    ready = application_ready()
+    blocked = needs_verification()
+    sel = ready if not keys else [s for s in ready if s['key'] in keys]
+    if not sel:
+        return {'error': 'nothing application-ready to open%s' % (
+            ' -- %d selection(s) are held in Needs Verification: %s' % (
+                len(blocked), [b['key'] for b in blocked]) if blocked else '')}
+
+    ledger = _load_open_ledger()
+    requested, failed = [], []
+    skipped_run, skipped_today, skipped_cap = [], [], []
+    seen_urls = set()
+
+    # Decide the whole target set BEFORE touching a browser, and budget the
+    # cap against what this RUN has already requested -- not against this
+    # call. Capping inside the attempt loop had two measured defects: a
+    # finalisation retry opened the selection that the first call had capped
+    # out (so a "retry" still produced a new tab, breaking the per-execution
+    # limit of 4), and a browser error never consumed budget, so a failing
+    # run walked the entire shortlist instead of stopping at 4.
+    budget = MAX_SELECTIONS - len(RUN.opened_set)
+    targets = []
     for s in sel:
-        url = s.get('url')
+        url, key = s.get('url'), s['key']
         if not url:
-            failed.append({'key': s['key'], 'error': 'no url'})
+            failed.append({'key': key, 'error': 'no url on this selection'})
             continue
+        if url in seen_urls or url in RUN.opened_set:
+            skipped_run.append({'key': key, 'url': url})
+            continue
+        if not force and url in ledger:
+            skipped_today.append({'key': key, 'url': url,
+                                  'first_requested': ledger[url].get('at')})
+            continue
+        seen_urls.add(url)
+        if len(targets) >= max(0, budget):
+            skipped_cap.append({'key': key, 'url': url})
+            continue
+        targets.append(s)
+
+    for s in targets:
+        url, key = s['url'], s['key']
+        # An attempt consumes budget whether or not it succeeds, so a failing
+        # browser cannot walk past the cap.
+        RUN.opened_set.add(url)
         try:
-            webbrowser.open_new_tab(url)
-            opened.append({'key': s['key'], 'company': s['company'], 'url': url})
+            accepted = webbrowser.open_new_tab(url)
         except Exception as e:
-            failed.append({'key': s['key'], 'error': str(e)[:80]})
-    RUN.opened_urls = opened
-    return {'opened': opened, 'opened_count': len(opened), 'failed': failed,
-            'note': 'Browser tabs opened to the employer application pages. No form was '
-                    'filled and nothing was submitted.'}
+            failed.append({'key': key, 'error': str(e)[:80]})
+            continue
+        entry = {'key': key, 'company': s['company'], 'url': url,
+                 'os_handoff_accepted': bool(accepted)}
+        requested.append(entry)
+        ledger[url] = {'key': key, 'at': datetime.datetime.now().isoformat(timespec='seconds'),
+                       'report': RUN.report_path}
+
+    _save_open_ledger(ledger)
+    RUN.opened_urls = (RUN.opened_urls or []) + requested
+    return {
+        'requested': requested,
+        'requested_count': len(requested),
+        'skipped_already_requested_this_run': skipped_run,
+        'skipped_already_requested_today': skipped_today,
+        'skipped_over_cap': skipped_cap,
+        'failed': failed,
+        'shortlist_size': len(RUN.selections),
+        'cap': MAX_SELECTIONS,
+        'note': ('These URLs were handed to the operating system to open. os_handoff_accepted '
+                 'only means the OS accepted the request -- it is NOT evidence that the page '
+                 'loaded, that the requisition is still open, or that it accepts applicants. '
+                 'No form was filled and nothing was submitted. Re-requesting is suppressed for '
+                 'the rest of today; pass force=true only if the user explicitly asks.'),
+    }
+
+
+def verify_export_matches_open_set(report_path=None):
+    """Deterministic cross-check: do the workbook's rows and the URLs we
+    requested agree EXACTLY?
+
+    This exists because "the tool said ok" and "a file exists" are both weaker
+    than reading the artefact back. A mismatch here means the user would be
+    looking at a tab that the report does not justify, or vice versa.
+    """
+    import openpyxl
+    path = Path(report_path or RUN.report_path or '')
+    if not path.exists():
+        return {'ok': False, 'error': 'no workbook at %s' % path}
+    wb = openpyxl.load_workbook(path)
+    ws = wb['Selected']
+    rows = list(ws.iter_rows(values_only=True))
+    header_idx = next((i for i, r in enumerate(rows) if r and r[0] == 'Priority'), None)
+    if header_idx is None:
+        return {'ok': False, 'error': 'no header row found in the Selected sheet'}
+    cols = {name: i for i, name in enumerate(rows[header_idx]) if name}
+    url_col = cols.get('Official application URL')
+    req_col = cols.get('Req ID')
+    data = [r for r in rows[header_idx + 1:] if r and r[url_col]]
+
+    sheet_urls = [r[url_col] for r in data]
+    sheet_reqs = [str(r[req_col]) for r in data]
+    requested_urls = [e['url'] for e in (RUN.opened_urls or [])]
+
+    problems = []
+    if len(sheet_urls) > MAX_SELECTIONS:
+        problems.append('workbook lists %d rows, more than the cap of %d'
+                        % (len(sheet_urls), MAX_SELECTIONS))
+    if len(set(sheet_urls)) != len(sheet_urls):
+        problems.append('workbook contains duplicate URLs')
+    if len(set(sheet_reqs)) != len(sheet_reqs):
+        problems.append('workbook contains duplicate requisition ids')
+    extra = [u for u in requested_urls if u not in sheet_urls]
+    if extra:
+        problems.append('opened URL(s) not present in the workbook: %s' % extra)
+
+    # "Agreement" has to account for same-day idempotency. On a rerun the
+    # browser already holds the tabs, so this run legitimately requests zero
+    # and comparing the sheet against THIS run's requests alone reported a
+    # false mismatch. The real question is whether every shortlist row is open
+    # in the browser -- requested now, or already requested earlier today --
+    # and whether anything was opened that the workbook does not justify.
+    ledger = _load_open_ledger()
+    accounted = set(requested_urls) | set(ledger)
+    missing = [u for u in sheet_urls if u not in accounted]
+    if missing:
+        problems.append('shortlist URL(s) never requested, today or now: %s' % missing)
+
+    return {
+        'ok': not problems,
+        'problems': problems,
+        'workbook_rows': len(sheet_urls),
+        'workbook_requisitions': sheet_reqs,
+        'urls_requested_this_run': requested_urls,
+        'urls_already_open_from_earlier_today': [u for u in sheet_urls
+                                                 if u in ledger and u not in requested_urls],
+        'urls_in_workbook_not_accounted_for': missing,
+        'exact_agreement': not problems and sorted(sheet_urls) == sorted(set(u for u in accounted
+                                                                             if u in sheet_urls)),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -442,11 +716,18 @@ TOOL_DEFINITIONS = [
          'partial_reason': {'type': 'string',
                             'description': 'Required when partial is true: what stopped the run.'}}}},
     {'name': 'open_application_urls',
-     'description': 'Open the official application pages for the selected opportunities in the '
-                    'browser. Opens pages only; cannot fill or submit anything.',
+     'description': 'FINAL STEP. Request the official application pages for the exported '
+                    'shortlist. Call it ONCE, and only after export_report has succeeded. It '
+                    'opens at most 4 unique URLs, only ones on the shortlist, and is idempotent: '
+                    'calling it again re-requests nothing, and URLs already requested earlier '
+                    'today are skipped. It cannot fill or submit anything, and an accepted OS '
+                    'handoff is not proof a page loaded.',
      'input_schema': {'type': 'object', 'properties': {
          'keys': {'type': 'array', 'items': {'type': 'string'},
-                  'description': 'Omit to open every selection.'}}}},
+                  'description': 'Omit to request every shortlisted selection.'},
+         'force': {'type': 'boolean',
+                   'description': 'Re-request URLs already opened earlier today. Only when the '
+                                  'user explicitly asks for that.'}}}},
 ]
 
 TOOL_REGISTRY = {

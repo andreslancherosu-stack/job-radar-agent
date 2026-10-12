@@ -2,89 +2,111 @@
 
 ## The command
 
-Paste this into PowerShell from the repo root. Nothing else to set up.
-
 ```powershell
-py agent.py radar --task "Review these job opportunities against my verified profile. Tell me which I should prioritize, which require clarification, and which I should skip. Explain the evidence and avoid duplicate applications."
+py agent.py radar --max-steps 25 --force-open --task "Review these job opportunities against my verified profile. Tell me which I should prioritize, which require clarification, and which I should skip. Explain the evidence and avoid duplicate applications."
 ```
 
-Maximise the window first — the trace is wide, and `ACTION:` lines wrapping mid-argument is the one thing that makes it hard to read.
+Maximise the window first — the trace is wide.
+
+**`--force-open` matters.** Tab-opening is idempotent per day: if you rehearse in the morning, the afternoon run opens nothing because those pages are already in your browser. That is correct behaviour and wrong for a live audience. `--force-open` gives fresh tabs. Drop it and you will likely see `BROWSER OPEN REQUESTS: 0`.
+
+Verify the artefact afterwards:
+
+```powershell
+py verify_report.py
+```
 
 ---
 
-## Timing, built on measured runs
+## Measured runtime
 
-Two consecutive runs took **153.9s** and **133.3s** (12 and 11 iterations of the 25 allowed). Plan for the agent to finish around **2:30**, and know it can reach **3:00**.
+Four complete runs: **133s, 154s, 160s, 186s**. Plan for **~2:40**, and know it can reach **3:10**.
 
-| Time | What is on screen | What you say |
+The 180-second budget is checked *before* each API call, so the final call can finish past it — 186s is a run that started its last step at ~175s. That is by design: the alternative is killing a call mid-flight and reporting a partial for no reason.
+
+| Time | On screen | What you say |
 |---|---|---|
-| **0:00–0:35** | Type the command, press Enter. Steps 1–2 appear. | "One task, in my own words. The model has ten tools. Nothing about the order is scripted — it decides." Point at the header: `max steps=25 | time budget=180s`. |
-| **0:35–1:20** | `search_openings`, then `get_posting_details` with several keys at once. | "That is a live call to Gartner's and Momentum's own job APIs — not a scraper, not a cached copy. It scanned ~300 postings. And it batched the detail lookups: six postings, one round trip." |
-| **1:20–2:00** | `check_application_history` calls. **This is the moment to watch for.** | "It asked with only a company name. The tool refused — *identity must not be guessed*. Next step it came back with explicit requisition ids. The observation changed its next action. That is the agent loop doing its job." |
-| **2:00–2:40** | `select_opportunity` calls, then `export_report`. | "Every selection carries a quote checked character-for-character against the real posting. Two Momentum requisitions I already applied to were refused as duplicates — against my real ledger." |
-| **2:40–3:10** | Four browser tabs open. `FINAL ANSWER` prints. | "It opened the official application pages. It cannot fill them — the browser tools are not registered in this mode." |
-| **3:10–4:10** | Scroll to `SEARCH COVERAGE`, then the metrics line. Open the workbook. | "Coverage is what it *actually* reached, including anything that failed. Five employers, not my 51-company list — the report says that itself." Then the numbers (see below). |
-| **4:10–5:00** | Questions. | Fall back to the honest-limits list. |
-
-If the agent finishes early, open the workbook sooner and spend the time on the coverage sheet — it is the most defensible part of the artefact.
+| **0:00–0:35** | Header, steps 1–2 | "One task in my own words. Ten tools. Nothing about the order is scripted." Point at `max steps=25 \| time budget=180s`. |
+| **0:35–1:20** | `search_openings`, then `get_posting_details` with several keys | "Live calls to Gartner's and Momentum's own job APIs — not a scraper. It scanned ~360 listings and batched the detail lookups." |
+| **1:20–2:00** | `check_application_history` | **The moment.** "Watch — it asked with only a company name. The tool refused: *identity must not be guessed*. Next step it came back with explicit requisition ids. The observation changed its next action." |
+| **2:00–2:45** | `select_opportunity`, `export_report` | "Every selection carries a quote checked character-for-character. Requisitions I already applied to are refused as duplicates, against my real ledger." |
+| **2:45–3:10** | `NEEDS VERIFICATION`, tabs open, `FINAL ANSWER` | "Gartner 112849 advertised an October 9 deadline. It is still listed with that sentence removed. That might be a repost — it is not proof. So it is kept and reported, but excluded from the shortlist and **no tab opens for it**." |
+| **3:10–4:10** | Scroll to coverage, counts, usage | Numbers below. Open the workbook — three sheets. |
+| **4:10–5:00** | Questions | Fall back to the limits list. |
 
 ---
 
-## The three things worth saying out loud
+## The four things worth saying
 
-**1. No fit score exists in Python.** Search for one — there is no weighting table and no ranking function. If there were, the model would just be restating a number the code already computed. Python enforces what is checkable: quote verbatim, duplicate blocked, at most four. The judgment is the model's.
+**1. No fit score exists in Python.** Grep for one. There is no weighting table and no ranking function. Python enforces what is checkable — quote verbatim, duplicate blocked, cap of four, availability conflict held back. The judgment is the model's.
 
-**2. Limits are enforced, not promised.** 25 iterations, 180 seconds checked *before* each call, 10-second network timeouts, no retry loops. Hit either ceiling and you get a workbook named `_PARTIAL`, stamped `PARTIAL` inside, and a non-zero exit code. A budget-limited run cannot be presented as finished.
+**2. Limits are enforced, not promised.** 25 iterations, 180s checked before each call, 10s network timeouts, no retry loops. Hit either ceiling and you get a workbook named `_PARTIAL`, stamped `PARTIAL` inside, and a non-zero exit.
 
-**3. Every number on screen was measured.** Token counts come from the API's usage block. The dollar figure is an estimate at list price and the run prints that assumption. `api_calls` is loop iterations; `api_requests` is HTTP attempts; the gap is retries.
+**3. Scanned ≠ evaluated.** 364 listings were *seen*; 10 postings had their requirement text *retrieved and read*. The report prints both, separately, because conflating them would overstate the work.
 
----
-
-## Numbers to quote
-
-| | Run A | Run B |
-|---|---|---|
-| Elapsed | 153.9s | 133.3s |
-| Iterations | 12 of 25 | 11 of 25 |
-| API requests / retries | 12 / 0 | 11 / 0 |
-| Tool calls / failures | 22 / 0 | 18 / 0 |
-| Postings scanned | 184 | 304 |
-| Selected | 4 | 4 |
-| Estimated cost | $2.00 | $1.68 |
-
-Test suite: **193 tests, all passing.**
+**4. An OS handoff is not a loaded page.** The run reports `os_handoff_accepted=True`, which means the operating system accepted the request — not that the employer's page rendered or that the role is still open.
 
 ---
 
-## Code walkthrough — the five things to be able to point at
+## Numbers to quote (final rehearsal)
 
-All in `agent.py`. These are the parts worth understanding.
+| | |
+|---|---|
+| Elapsed | 186.5s |
+| Iterations | 12 of 25 |
+| API requests / retries | 12 / 0 |
+| Tool calls / failures | 21 / 0 |
+| Listings scanned | 364 |
+| Postings fully evaluated | 10 |
+| Application-ready | 3 |
+| Needs Verification | 1 (Gartner 112849) |
+| Browser open requests | 0 — already open from earlier today; `--force-open` gives 3 |
 
-**1. The API request — line 425.** `client.messages.create(...)` with `model`, `system`, `tools`, `messages`. Direct SDK call. No framework. The whole conversation goes every time, which is why caching exists at line 394.
+**Usage, all four categories separate:**
 
-**2. Reading the request — line 477.**
+| | tokens |
+|---|---|
+| Uncached input | 219 |
+| Cache creation input | 37,896 |
+| Cache read input | 291,196 |
+| **Total input billed** | **329,311** |
+| Output | 13,438 |
+| **Estimated cost** | **$2.16** |
+
+Say "219 uncached input tokens" — never "219 input tokens". The run bills 329,311 input tokens in total; caching changes the *rate*, not the volume. Rates are list price and the run prints that assumption.
+
+Test suite: **76 radar + agent tests**, full suite **193+**, all passing.
+
+---
+
+## Code walkthrough — five places to point at
+
+All in `agent.py`.
+
+**1. The API request.** `client.messages.create(model=, system=, tools=, messages=)`. Direct SDK call, no framework. The whole conversation goes every time — which is why caching exists.
+
+**2. Reading the request.**
 ```python
 tool_uses = [b for b in response.content if getattr(b, 'type', None) == 'tool_use']
 ```
-The response is a list of blocks. Some are text, some are tool-use requests. That one line is "what did the model ask for?"
+The response is a list of blocks. That one line is "what did the model ask for?"
 
-**3. Dispatch — line 547.** `tools.execute_tool(block.name, block.input, registry=tool_registry)` validates the name against the registry and the arguments against the schema, *then* calls the real function. An unknown or malformed call becomes an error observation the model can recover from — not a crash.
+**3. Dispatch.** `tools.execute_tool(block.name, block.input, registry=tool_registry)` validates name against registry and arguments against schema, *then* calls the real function. A bad call becomes a recoverable error observation, not a crash.
 
-**4. Returning results — line 564.** `'tool_use_id': block.id`. This pairing is what makes the loop work: the API matches each result to the request that caused it. Get it wrong and the conversation is malformed. Note `is_error` is set honestly — a failed tool reports as failed, which is how the model learned to retry with job ids.
+**4. Returning results.** `'tool_use_id': block.id` — the pairing that makes the loop work. `is_error` is set honestly, which is how the model learned to retry with job ids.
 
-**5. State and termination.** State is the `messages` list — append the assistant turn (line 538), append the results (line 599), call again. Termination has one shape: every unfinished path goes through `incomplete()`, which is also where the partial report gets written. Line 397 is the iteration ceiling, 400 the time budget, 504 "no more tools requested — but check it wasn't truncated first", 602 the ceiling exit.
-
-The point of line 504: *the model stopping is not proof of success.* The run also checks the required outcome tool actually succeeded, and the CLI re-checks the workbook exists on disk by size.
+**5. State and termination.** State is the `messages` list: append assistant turn, append results, call again. Every unfinished path exits through one `incomplete()` function, which is also where the partial report is written. `if not tool_uses:` is the subtle one — *the model stopping is not proof of success*, so the run also checks the required outcome tool succeeded and the CLI re-reads the workbook.
 
 ---
 
 ## If something goes wrong live
 
-| Symptom | What it means | What to do |
+| Symptom | Meaning | Response |
 |---|---|---|
-| `api_unavailable` + "OUT OF CREDIT" | Billing, not a bug | Say so, show `README_RADAR.md` §6 for the measured runs |
-| A source shows `reached=NO` | That employer's API failed | This is the honest-coverage feature working — point at it |
+| `BROWSER OPEN REQUESTS: 0` | Already opened today | You forgot `--force-open`. Say "idempotency working", move on |
+| `api_unavailable` + OUT OF CREDIT | Billing | Show the measured runs in `README_RADAR.md` |
+| A source `reached=NO` | That API failed | Honest-coverage feature working — point at it |
 | Run hits 180s | Time ceiling | A `_PARTIAL` workbook was still written; open it |
-| Fewer than 4 selections | Fewer qualified | Correct behaviour. Standards are not lowered to fill rows |
+| Fewer than 4 selections | Fewer qualified | Correct. Standards are not lowered to fill rows |
 
-Nothing here needs a rescue. Every failure mode prints what it is.
+Nothing needs a rescue — every failure mode prints what it is.

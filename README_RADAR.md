@@ -38,7 +38,7 @@ Six deterministic tools do the work; the model does the judging.
 | `get_posting_details` | Batch-fetches requirement text, up to 8 at once | Does not summarise or interpret |
 | `check_application_history` | Looks up the canonical ledger | Does not decide whether to reapply |
 | `select_opportunity` | Verifies the quote is verbatim, blocks duplicates, caps at 4 | **Does not score fit** |
-| `export_report` / `open_application_urls` | Writes the workbook, opens tabs | Cannot fill or submit a form |
+| `export_report` / `open_application_urls` | Writes the workbook; requests at most 4 tabs, once | Cannot fill or submit a form |
 
 **There is no fit score anywhere in Python.** No weights, no ranking function. If there were, the model would be decorative — restating a number Python had already computed. Suitability, priority order and "is this gap disqualifying?" are the model's, argued from text it actually retrieved.
 
@@ -90,6 +90,32 @@ Five employers is not the 51-company priority list, and the report says so on it
 
 ---
 
+## 3b. Opening tabs
+
+Tabs are requested once, at the end, and only for the application-ready shortlist:
+
+- **after** `export_report` wrote a workbook that exists -- never for a shortlist nothing records
+- **at most 4 unique URLs**, drawn only from the exported rows
+- **idempotent within the run**: a second call, or a finalisation retry, requests nothing
+- **idempotent across the day**: a same-day rerun skips what is already open (`--force-open` overrides)
+- **honest**: the run reports `os_handoff_accepted`, which means the OS took the request -- not that the page loaded
+
+Discovery, retrieval, assessment and retries open nothing. There is exactly one `webbrowser` call
+site in the whole project.
+
+## 3c. Availability conflicts
+
+`availability_conflicts.json` records requisitions where official evidence disagrees with itself.
+Such a requisition keeps its assessment and appears under **Needs Verification**, but is excluded
+from the application-ready shortlist and gets no tab. The record persists even on runs where the
+model does not select it.
+
+Currently held: **Gartner req 112849**. It advertised "Application Deadline: October 9th, 2026";
+that date passed, the sentence has since been removed from the posting body, and `startDate` is now
+2026-10-10 with `endDate: null` and `canApply: true`. Consistent with a repost -- not proof of one.
+`canApply` means Workday is rendering an apply control, not that the employer accepts new
+applicants for this cycle. Resolving it needs an answer from Gartner recruiting, not elapsed time.
+
 ## 4. Limits, and what happens when they bite
 
 | Limit | Value | Enforced where |
@@ -98,6 +124,7 @@ Five employers is not the 51-company priority list, and the report says so on it
 | Wall clock | 180s | checked **before** each API call, so no call is spent that cannot be afforded |
 | Per-request network | 10s | every HTTP call; **no retry loops** |
 | Selections | 4 | `select_opportunity` |
+| Browser tabs per run | 4 unique, application-ready only | `open_application_urls` |
 
 Both ceilings exit through a single `incomplete()` path that writes a workbook named `..._PARTIAL.xlsx` and stamped `PARTIAL` inside. Completed assessments survive; the run exits non-zero. **A budget-limited run cannot report as completed** — not in the filename, not in the file, not in the exit code.
 
@@ -119,18 +146,25 @@ Prompt caching matters here: every step resends the whole conversation, so cost 
 
 Two consecutive end-to-end runs, no cherry-picking:
 
-| | Run A | Run B |
-|---|---|---|
-| Elapsed | 153.9s | 133.3s |
-| Iterations | 12 of 25 | 11 of 25 |
-| API requests / retries | 12 / 0 | 11 / 0 |
-| Tool calls / failures | 22 / 0 | 18 / 0 |
-| Postings scanned | 184 | 304 |
-| Selected | 4 | 4 |
-| Status | COMPLETE | COMPLETE |
-| Estimated cost | $2.00 | $1.68 |
+Four complete runs: **133s, 154s, 160s, 186s**. Final rehearsal:
 
-Workbook verified on disk by size in both; 4 tabs opened in both.
+| | |
+|---|---|
+| Elapsed | 186.5s |
+| Iterations | 12 of 25 |
+| API requests / retries | 12 / 0 |
+| Tool calls / failures | 21 / 0 |
+| Listings scanned | 364 |
+| Postings fully evaluated | 10 |
+| Application-ready | 3 |
+| Needs Verification | 1 |
+| Estimated cost | $2.16 |
+
+Usage, separately: **219 uncached input**, **37,896 cache creation**, **291,196 cache read**,
+**13,438 output** -- 329,311 input tokens billed in total. Caching changes the rate, not the
+volume; "219 input tokens" alone would be a false claim.
+
+The workbook is verified by READING IT BACK (`py verify_report.py`), not by file size.
 
 ---
 
