@@ -186,28 +186,109 @@ def _api_status_guidance(exc):
             'API said: %s' % (status or 'an error', type(exc).__name__, raw))
 
 
+# List prices in USD per million tokens. These are an ASSUMPTION stated in
+# the open, not a reading of the account's invoice: the printed dollar figure
+# is an estimate to be checked against console billing, while the token counts
+# beside it come from the API's own usage block and are exact.
+PRICING_USD_PER_MTOK = {
+    'claude-opus-5': {'input': 15.0, 'output': 75.0},
+    'claude-sonnet-5': {'input': 3.0, 'output': 15.0},
+    'claude-haiku-4-5-20251001': {'input': 1.0, 'output': 5.0},
+}
+
+
+# Prompt-cache multipliers against the base input price: a write costs more
+# than a fresh token, a read costs far less. Billing them at the plain input
+# rate would overstate a cached run's cost by roughly an order of magnitude.
+CACHE_WRITE_MULTIPLIER = 1.25
+CACHE_READ_MULTIPLIER = 0.1
+
+
+def estimate_cost(model, input_tokens, output_tokens, cache_write_tokens=0, cache_read_tokens=0):
+    """(usd, pricing_note). usd is None when the model's price is unknown --
+    an unknown price must read as unknown, never as $0.00."""
+    price = PRICING_USD_PER_MTOK.get(model)
+    if price is None:
+        return None, 'no list price recorded for %r; token counts are exact, cost is not shown' % model
+    usd = ((input_tokens / 1e6) * price['input']
+           + (output_tokens / 1e6) * price['output']
+           + (cache_write_tokens / 1e6) * price['input'] * CACHE_WRITE_MULTIPLIER
+           + (cache_read_tokens / 1e6) * price['input'] * CACHE_READ_MULTIPLIER)
+    return usd, ('estimated at list price %s: $%.2f/Mtok in, $%.2f/Mtok out, cache write x%.2f, '
+                 'cache read x%.2f (verify against console billing)'
+                 % (model, price['input'], price['output'],
+                    CACHE_WRITE_MULTIPLIER, CACHE_READ_MULTIPLIER))
+
+
+def _fmt_args(d, limit=150):
+    """Readable call signature: name=value, with long values clipped. The
+    trace must show what the model ACTUALLY asked for, so arguments are
+    rendered, not summarised away."""
+    parts = []
+    for k, v in (d or {}).items():
+        t = json.dumps(v, ensure_ascii=False, default=str)
+        if len(t) > limit:
+            t = t[:limit] + '...<clipped>'
+        parts.append('%s=%s' % (k, t))
+    return ', '.join(parts)
+
+
+def _fmt_observation(obs, limit=1100):
+    """Compact, readable observation for the trace. Clipping is ANNOUNCED --
+    a silently truncated observation would misrepresent what the model saw."""
+    text = json.dumps(obs, ensure_ascii=False, indent=1, default=str)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + ('\n ...<trace display clipped at %d of %d chars; the MODEL received '
+                           'the complete observation>' % (limit, len(text)))
+
+
 class Metrics:
     """Measured, not promised. Printed at the end of every run."""
 
-    def __init__(self):
+    def __init__(self, model=None):
         self.started = time.monotonic()
+        self.model = model
+        # api_calls counts SUCCESSFUL model responses -- i.e. loop iterations.
+        # api_requests counts HTTP attempts, so a retried step shows up as
+        # more requests than calls. Reporting only one of these would hide
+        # either wasted spend or the real iteration count.
         self.api_calls = 0
+        self.api_requests = 0
+        self.api_retries = 0
         self.tool_calls = 0
         self.tool_failures = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.cache_write_tokens = 0
+        self.cache_read_tokens = 0
         self.stop_reason = None          # why OUR loop ended
         self.api_stop_reason = None      # why the LAST API response ended (truncation shows up here)
         self.successful_tools = set()    # tools that actually returned a non-error observation
 
+    def elapsed(self):
+        return time.monotonic() - self.started
+
+    def cost(self):
+        return estimate_cost(self.model, self.input_tokens, self.output_tokens,
+                            self.cache_write_tokens, self.cache_read_tokens)
+
     def as_dict(self):
+        usd, note = self.cost()
         return {
-            'elapsed_seconds': round(time.monotonic() - self.started, 2),
+            'elapsed_seconds': round(self.elapsed(), 2),
+            'model': self.model,
             'api_calls': self.api_calls,
+            'api_requests': self.api_requests,
+            'api_retries': self.api_retries,
             'tool_calls': self.tool_calls,
             'tool_failures': self.tool_failures,
             'input_tokens': self.input_tokens,
             'output_tokens': self.output_tokens,
+            'cache_write_tokens': self.cache_write_tokens,
+            'cache_read_tokens': self.cache_read_tokens,
+            'estimated_cost_usd': None if usd is None else round(usd, 4),
+            'pricing_note': note,
             'loop_stop_reason': self.stop_reason,
             'api_stop_reason': self.api_stop_reason,
             'tools_that_succeeded': sorted(self.successful_tools),
@@ -227,8 +308,18 @@ def build_toolset(name):
         import browser_tools
         definitions += browser_tools.TOOL_DEFINITIONS
         registry.update(browser_tools.TOOL_REGISTRY)
+    elif name == 'radar':
+        # Discovery + reporting. Deliberately does NOT include the browser
+        # tools: this mode opens application pages for the human and must be
+        # structurally incapable of filling a form, not merely instructed not to.
+        import radar_tools
+        keep = {'get_profile_facts', 'get_confirmed_answers', 'check_application_history',
+                'request_missing_fact'}
+        definitions = [d for d in definitions if d['name'] in keep] + radar_tools.TOOL_DEFINITIONS
+        registry = {k: v for k, v in registry.items() if k in keep}
+        registry.update(radar_tools.TOOL_REGISTRY)
     elif name != 'assess':
-        raise ValueError('unknown toolset %r (use: assess, apply)' % name)
+        raise ValueError('unknown toolset %r (use: assess, apply, radar)' % name)
     if any('submit' in n.lower() for n in registry):
         raise RuntimeError('refusing to run: a submission tool is registered')
     return definitions, registry
@@ -236,14 +327,44 @@ def build_toolset(name):
 
 def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbose=True,
               tool_definitions=None, tool_registry=None, required_outcome_tool=None,
-              retry_backoff_seconds=2):
-    """The agent loop. `client` is injectable so tests can run it without a network."""
+              retry_backoff_seconds=2, time_budget_seconds=None, system_prompt=None,
+              on_incomplete=None, trace=False):
+    """The agent loop. `client` is injectable so tests can run it without a network.
+
+    time_budget_seconds is a wall-clock ceiling checked BEFORE each model call,
+    so a run cannot quietly overrun a live demonstration slot. It is a second,
+    independent ceiling alongside max_steps -- steps bound how many decisions
+    the model may make, seconds bound how long the user waits, and either can
+    bite first.
+
+    on_incomplete(reason) is called when the loop ends WITHOUT finishing, so a
+    caller can still persist whatever real work was completed (e.g. export an
+    explicitly-labelled partial report). It must never be used to dress a
+    budget-limited run up as a successful one.
+    """
     model = model or os.environ.get('JOB_RADAR_MODEL') or DEFAULT_MODEL
     if tool_definitions is None:
         tool_definitions = tools.TOOL_DEFINITIONS
     if tool_registry is None:
         tool_registry = tools.TOOL_REGISTRY
-    metrics = Metrics()
+    metrics = Metrics(model=model)
+    system_prompt = system_prompt or SYSTEM_PROMPT
+
+    def incomplete(status, problem, **extra):
+        """Single exit path for every unfinished run, so the partial-save hook
+        can never be forgotten on one branch and remembered on another."""
+        metrics.stop_reason = status
+        payload = {'status': status, 'problem': problem,
+                   'required_outcome_met': (required_outcome_tool in metrics.successful_tools
+                                            if required_outcome_tool else None),
+                   'transcript': transcript, 'metrics': metrics.as_dict()}
+        payload.update(extra)
+        if on_incomplete is not None:
+            try:
+                payload['partial_save'] = on_incomplete(status)
+            except Exception as e:                       # a failed save must not mask the real stop
+                payload['partial_save_error'] = '%s: %s' % (type(e).__name__, str(e)[:120])
+        return payload
 
     # Imported unconditionally (not just when client is None) because the
     # retry loop below needs anthropic.APIConnectionError as a real type to
@@ -263,7 +384,28 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
     messages = [{'role': 'user', 'content': task}]
     transcript = []
 
+    # Prompt caching. Every step resends the whole conversation, so input cost
+    # grows quadratically with step count: a measured 9-step run billed 274,000
+    # input tokens for roughly 30,000 tokens of distinct content. Marking the
+    # static prefix (this system prompt, which also carries the tool rules)
+    # lets later steps re-read it at the cache rate instead of the full input
+    # rate. Degrades safely: if the API ignores cache_control, the run is
+    # simply billed as before.
+    cached_system = [{'type': 'text', 'text': system_prompt,
+                      'cache_control': {'type': 'ephemeral'}}]
+
     for step in range(1, max_steps + 1):
+        # ---- STEP 0: wall-clock ceiling, checked BEFORE spending another call ----
+        if time_budget_seconds is not None and metrics.elapsed() >= time_budget_seconds:
+            return incomplete(
+                'time_budget_exceeded',
+                'Stopped after %.1fs against a %.0fs budget, before step %d. This run is '
+                'INCOMPLETE: do not present it as a finished result.'
+                % (metrics.elapsed(), time_budget_seconds, step))
+
+        if verbose and trace:
+            print('\n----- STEP %d -----' % step)
+
         # ---- STEP 1: call the model with the conversation so far + our tools ----
         # A real, measured gap (2026-10-04): a transient connection drop here
         # raised anthropic.APIConnectionError, which nothing caught -- it
@@ -277,10 +419,13 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
         last_error = None
         for attempt in range(3):
             try:
+                metrics.api_requests += 1
+                if attempt:
+                    metrics.api_retries += 1
                 response = client.messages.create(
                     model=model,
                     max_tokens=DEFAULT_MAX_TOKENS,
-                    system=SYSTEM_PROMPT,
+                    system=cached_system,
                     tools=tool_definitions,
                     messages=messages,
                 )
@@ -311,26 +456,46 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
                         'http_status': getattr(e, 'status_code', None),
                         'transcript': transcript, 'metrics': metrics.as_dict()}
         if response is None:
-            metrics.stop_reason = 'connection_failed'
-            return {'status': 'connection_failed',
-                    'problem': ('Could not reach the Anthropic API after 3 attempts: %s. No tool call '
-                                'was lost -- everything verified before this point is still on the live '
-                                'page. Re-run once connectivity is back; do not loop retrying.' % last_error),
-                    'transcript': transcript, 'metrics': metrics.as_dict()}
+            return incomplete('connection_failed',
+                              'Could not reach the Anthropic API after 3 attempts: %s. No tool call '
+                              'was lost -- everything verified before this point is still on the live '
+                              'page. Re-run once connectivity is back; do not loop retrying.' % last_error)
         metrics.api_calls += 1
         metrics.api_stop_reason = getattr(response, 'stop_reason', None)
         usage = getattr(response, 'usage', None)
-        if usage is not None:
-            metrics.input_tokens += getattr(usage, 'input_tokens', 0) or 0
-            metrics.output_tokens += getattr(usage, 'output_tokens', 0) or 0
+        step_in = (getattr(usage, 'input_tokens', 0) or 0) if usage is not None else 0
+        step_out = (getattr(usage, 'output_tokens', 0) or 0) if usage is not None else 0
+        step_cw = (getattr(usage, 'cache_creation_input_tokens', 0) or 0) if usage is not None else 0
+        step_cr = (getattr(usage, 'cache_read_input_tokens', 0) or 0) if usage is not None else 0
+        metrics.input_tokens += step_in
+        metrics.output_tokens += step_out
+        metrics.cache_write_tokens += step_cw
+        metrics.cache_read_tokens += step_cr
 
         # ---- STEP 2: read what the model said and which tools it wants ----
         said = [b.text for b in response.content if getattr(b, 'type', None) == 'text']
         tool_uses = [b for b in response.content if getattr(b, 'type', None) == 'tool_use']
         for text in said:
             transcript.append({'step': step, 'role': 'assistant', 'text': text})
-            if verbose and text.strip():
-                print('\n[step %d] model: %s' % (step, text.strip()))
+        if verbose and trace:
+            spoken = '\n'.join(t.strip() for t in said if t.strip())
+            print('Agent:')
+            if spoken:
+                print(spoken)
+            for block in tool_uses:
+                print('ACTION: %s(%s)' % (block.name, _fmt_args(block.input)))
+            usd, _ = metrics.cost()
+            cache_bit = ''
+            if step_cw or step_cr:
+                cache_bit = ' | cache +%s w / %s r' % (format(step_cw, ','), format(step_cr, ','))
+            print('[cost] step %d: in %s / out %s tok%s  | running total %s in + %s out  = %s'
+                  % (step, format(step_in, ','), format(step_out, ','), cache_bit,
+                     format(metrics.input_tokens, ','), format(metrics.output_tokens, ','),
+                     ('$%.4f' % usd) if usd is not None else 'cost unknown'))
+        elif verbose:
+            for text in said:
+                if text.strip():
+                    print('\n[step %d] model: %s' % (step, text.strip()))
 
         # The model stopped asking for tools. That alone does NOT mean success:
         # the response may have been cut off mid-sentence, or the model may have
@@ -376,18 +541,21 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
         results_for_model = []
         human_question = None
         for block in tool_uses:
-            if verbose:
+            if verbose and not trace:
                 print('[step %d] tool -> %s(%s)' % (step, block.name,
                       json.dumps(block.input, ensure_ascii=False)[:160]))
             observation, is_error = tools.execute_tool(block.name, block.input, registry=tool_registry)
+            if verbose and trace:
+                print('\nObservation%s:' % (' (TOOL ERROR)' if is_error else ''))
+                print(_fmt_observation(observation))
             metrics.tool_calls += 1
             if is_error:
                 metrics.tool_failures += 1
-                if verbose:
+                if verbose and not trace:
                     print('[step %d]   !! FAILED: %s' % (step, observation.get('error', '')[:200]))
             else:
                 metrics.successful_tools.add(block.name)
-                if verbose:
+                if verbose and not trace:
                     print('[step %d]   ok' % step)
             transcript.append({'step': step, 'role': 'tool', 'name': block.name,
                                'input': block.input, 'observation': observation, 'is_error': is_error})
@@ -407,15 +575,114 @@ def run_agent(task, client=None, model=None, max_steps=DEFAULT_MAX_STEPS, verbos
                     'transcript': transcript, 'metrics': metrics.as_dict()}
 
         # ---- STEP 5: feed the real observations back and loop ----
+        # Move a cache breakpoint to the newest tool_result each turn, so the
+        # conversation built up so far is read from cache on the next call
+        # rather than re-billed in full.
+        #
+        # The API allows a MAXIMUM OF 4 cache_control blocks per request, and
+        # that budget is counted across the WHOLE request -- system prompt plus
+        # every message. Clearing only the current turn's blocks left the
+        # previous turns' breakpoints in place, and a measured run died at step
+        # 5 with "A maximum of 4 blocks with cache_control may be provided.
+        # Found 5." So strip every prior breakpoint first: one on the system
+        # prompt plus one on the newest tool_result is all that is needed,
+        # because a later breakpoint already caches everything before it.
+        for prior in messages:
+            content = prior.get('content')
+            if isinstance(content, list):
+                for blk in content:
+                    if isinstance(blk, dict):
+                        blk.pop('cache_control', None)
+        for block in results_for_model:
+            block.pop('cache_control', None)
+        results_for_model[-1]['cache_control'] = {'type': 'ephemeral'}
         messages.append({'role': 'user', 'content': results_for_model})
 
     # ---- STEP 6b: explicit execution limit ----
-    metrics.stop_reason = 'max_steps_reached'
-    return {'status': 'max_steps_reached',
-            'required_outcome_met': (required_outcome_tool in metrics.successful_tools
-                                     if required_outcome_tool else None),
-            'problem': 'Hit the %d-step limit before finishing. The task is INCOMPLETE.' % max_steps,
-            'transcript': transcript, 'metrics': metrics.as_dict()}
+    return incomplete('max_steps_reached',
+                      'Hit the %d-step iteration ceiling before finishing. The task is '
+                      'INCOMPLETE and must not be reported as completed.' % max_steps)
+
+
+RADAR_MAX_STEPS = 25              # hard ceiling required for the graded demonstration
+RADAR_TIME_BUDGET_SECONDS = 180   # wall-clock ceiling; the demo slot is five minutes total
+
+RADAR_SYSTEM_PROMPT = """You are the judgment layer of Job Radar, a personal job-search assistant \
+for one candidate. Deterministic Python tools retrieve data, check the application ledger, validate \
+evidence, build the report and open URLs. YOU decide what is worth applying to and in what order. \
+No tool scores a job for you; that judgment is yours alone and must be argued from retrieved facts.
+
+YOUR TASK, IN ORDER
+1. Search live openings across the official employer APIs available to you.
+2. Read requirement text for the candidates that look plausible -- BATCH them, several keys per
+   get_posting_details call, because each call costs an API round trip.
+3. Judge fit against the candidate's verified profile, then select UP TO FOUR opportunities.
+4. Call export_report.
+5. Call open_application_urls.
+Steps 4 and 5 are the deliverable. A run that reasons well and never calls them has failed.
+
+EFFICIENCY -- YOU HAVE AT MOST 25 STEPS AND ABOUT 3 MINUTES
+- Pull profile facts ONCE, naming only the sections you need. Do not re-request them.
+- Batch posting lookups. One call with six keys beats six calls with one.
+- Do not re-read a posting you already have. Do not ask for full_text unless an excerpt genuinely
+  left out something decision-relevant.
+- Stop as soon as you have four good selections, or fewer if fewer qualify.
+- Search once with a broad keyword list unless the first search genuinely failed. Prefer a SINGLE
+  short search_text term ("analyst"); several joined terms match almost nothing on Workday.
+- When you check application history, always pass job_id -- the tool refuses a company name alone.
+
+"PARTIAL" MEANS THE RUN WAS CUT SHORT -- nothing else. Pass partial=true only if you ran out of
+steps or time or a source failed, so work you meant to do did not happen. Narrow coverage is NOT
+partial: this tool only ever reaches five employers and that is a known, documented limit.
+Unresolved questions are NOT partial either; they are the normal output of honest assessment and
+belong in unresolved_questions. If you did what you set out to do, the run is COMPLETE even if the
+answer is "only two of these are worth applying to".
+
+EVIDENCE RULES
+- Every selection needs a quote copied VERBATIM from the retrieved posting. It is checked against
+  the real text and rejected if it is not there. Never paraphrase inside a quote.
+- Only use facts returned by tools. Never invent an employer, date, requisition, credential or
+  duration of experience.
+- A null or absent field is UNKNOWN -- not false, not zero.
+- A posting appearing in search results means the employer's API listed it just now. That is NOT
+  proof the vacancy still accepts applicants. Say so when it matters.
+
+JUDGMENT RULES
+- MISSING EVIDENCE IS NOT EVIDENCE OF FAILURE. Rule a posting out only when retrieved facts
+  establish an actual shortfall or an explicit incompatibility. When the posting simply does not
+  establish whether a requirement is met, that is an UNRESOLVED QUESTION -- record it in
+  unresolved_questions and let the selection stand or fall on everything else.
+- Distinguish REQUIRED from PREFERRED. Operations and leadership experience is real professional
+  experience, but it does not by itself satisfy a stated requirement for years of analytics tenure.
+- Never output a percentage, score or hiring-probability estimate.
+- Do NOT weaken your standards to reach four selections. Three good ones beat four padded ones, and
+  zero is a legitimate answer if nothing qualifies.
+
+WORK AUTHORIZATION -- keep four things apart: (a) current authorization, (b) future sponsorship
+need, (c) current OPT status, (d) the employer's actual stated policy. An explicit "no sponsorship
+now or in the future" clause conflicts with this candidate's confirmed future sponsorship need and
+is a genuine exclusion. An employer's silence on sponsorship is UNCERTAIN, never an auto-reject.
+
+STANDING EXCLUSIONS: exclude the MBA and unsupported hospitality experience. USD 50,000 is an
+expectation to state if asked, NEVER a filter for excluding jobs. Do not infer relocation
+willingness or an immediate start date.
+
+DUPLICATES: selecting a requisition already in the ledger is a defect. The tool blocks it; do not
+fight the block, pick something else.
+
+FINISH by stating your prioritised decisions with evidence, what remains unresolved, what you could
+not cover, and where the report was saved."""
+
+
+def build_radar_task(max_steps, budget, user_task=None):
+    return (
+        (user_task or
+         'Review the job market for me across the official employer sources you can reach. '
+         'Tell me which openings I should prioritise, which need clarification before I apply, '
+         'and which to skip. Explain the evidence and avoid duplicate applications.')
+        + '\n\nOperating limits for this run: at most %d agent steps and about %d seconds of '
+          'wall clock. Budget them. Finish by exporting the report and opening the application '
+          'URLs for the opportunities you selected.' % (max_steps, budget))
 
 
 def build_assess_task(source):
@@ -454,6 +721,21 @@ def main():
     prepare.add_argument('--env-file', default='.env')
     prepare.add_argument('--json', action='store_true')
 
+    radar = sub.add_parser('radar', help='Discover live openings from official employer APIs, '
+                                         'judge them, export a dated Excel report, and open the '
+                                         'selected application pages. Never fills a form.')
+    radar.add_argument('--task', default=None, help='Your request in your own words. A sensible '
+                                                    'default is used when omitted.')
+    radar.add_argument('--model', default=None)
+    radar.add_argument('--max-steps', type=int, default=RADAR_MAX_STEPS,
+                       help='Hard iteration ceiling (default %d).' % RADAR_MAX_STEPS)
+    radar.add_argument('--time-budget', type=int, default=RADAR_TIME_BUDGET_SECONDS,
+                       help='Wall-clock ceiling in seconds (default %d).' % RADAR_TIME_BUDGET_SECONDS)
+    radar.add_argument('--env-file', default='.env')
+    radar.add_argument('--no-open', action='store_true',
+                       help='Do everything except actually opening browser tabs.')
+    radar.add_argument('--json', action='store_true')
+
     args = parser.parse_args()
     load_dotenv_if_present(args.env_file)
 
@@ -469,7 +751,38 @@ def main():
         return
 
     required_outcome = None
-    if args.command == 'assess':
+    run_kwargs = {}
+    if args.command == 'radar':
+        import radar_tools
+        radar_tools.reset_run()
+        if args.no_open:
+            radar_tools.TOOL_REGISTRY['open_application_urls'] = lambda keys=None: {
+                'opened': [], 'opened_count': 0,
+                'note': 'Opening suppressed by --no-open; the URLs are in the report.'}
+        task = build_radar_task(args.max_steps, args.time_budget, args.task)
+        definitions, registry = build_toolset('radar')
+        # "The model stopped talking" is not success. This run is only done if
+        # the workbook was actually written.
+        required_outcome = 'export_report'
+        run_kwargs = {
+            'system_prompt': RADAR_SYSTEM_PROMPT,
+            'time_budget_seconds': args.time_budget,
+            'trace': True,
+            # Preserve whatever real work was completed when a ceiling bites.
+            # The report is written with partial=True so the file itself says
+            # it is incomplete -- a budget-limited run must never be filed as
+            # a finished one.
+            'on_incomplete': lambda reason: radar_tools.export_report(
+                summary='Run stopped early (%s) before the model finished.' % reason,
+                partial=True, partial_reason=reason),
+        }
+        print('=' * 70)
+        print('JOB RADAR AGENT  |  model=%s  |  max steps=%d  |  time budget=%ds'
+              % (args.model or os.environ.get('JOB_RADAR_MODEL') or DEFAULT_MODEL,
+                 args.max_steps, args.time_budget))
+        print('Task: %s' % (args.task or 'Review live openings and tell me what to prioritise.'))
+        print('=' * 70)
+    elif args.command == 'assess':
         task = build_assess_task(args.source)
         definitions, registry = build_toolset('assess')
         # The assess task is only "done" if the assessment was actually saved.
@@ -484,10 +797,15 @@ def main():
     try:
         result = run_agent(task, model=args.model, max_steps=args.max_steps,
                            tool_definitions=definitions, tool_registry=registry,
-                           required_outcome_tool=required_outcome)
+                           required_outcome_tool=required_outcome, **run_kwargs)
     except RuntimeError as e:
         print('ERROR: %s' % e, file=sys.stderr)
         sys.exit(1)
+
+    if args.command == 'radar':
+        print('\n' + '=' * 70)
+        print('FINAL ANSWER:')
+        print(result.get('final_text') or '(the model produced no closing summary)')
 
     print('\n' + '=' * 70)
     print('status: %s' % result['status'])
@@ -498,6 +816,32 @@ def main():
     if result['status'] == 'needs_human_input':
         q = result['question']
         print('\nThe agent needs one fact from you:\n  Q: %s\n  why: %s' % (q['question'], q['why_needed']))
+    if args.command == 'radar':
+        import radar_tools
+        run = radar_tools.RUN
+        # Verify the deliverable ON DISK. The tool reporting success is not
+        # proof the file exists -- "no more tool calls" and "the tool said ok"
+        # are both weaker than looking.
+        path = Path(run.report_path) if run.report_path else None
+        exists = bool(path and path.exists())
+        print('\nSELECTED (%d):' % len(run.selections))
+        for s in sorted(run.selections, key=lambda x: str(x.get('priority'))):
+            print('  %s. %s -- %s [%s]' % (s.get('priority'), s.get('company'),
+                                           s.get('title'), s.get('job_id')))
+            print('     %s' % s.get('url'))
+            for q in (s.get('unresolved_questions') or []):
+                print('     ? %s' % q)
+        print('\nSEARCH COVERAGE (what was actually reached):')
+        for c in run.coverage:
+            print('  %-11s %-12s reached=%-3s scanned=%-4s kept=%s%s'
+                  % (c['source'], c['company'] or '', 'yes' if c['reached'] else 'NO',
+                     c['returned_by_source'], c['kept_after_filter'],
+                     '  ERROR: %s' % c['error'] if c.get('error') else ''))
+        print('\nREPORT: %s' % (run.report_path or 'NOT WRITTEN'))
+        print('  verified on disk: %s%s' % (exists,
+              ' (%d bytes)' % path.stat().st_size if exists else ''))
+        print('OPENED TABS: %d' % len(run.opened_urls))
+
     print('\nmetrics: %s' % json.dumps(result['metrics']))
     # A run that did not achieve its outcome must not look like a success to a
     # shell script, a CI job, or a tired human reading the last line.

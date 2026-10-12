@@ -1,0 +1,71 @@
+{
+  "_note": "Documented source coverage for programmatic discovery. Every entry is an OFFICIAL employer-controlled endpoint (the ATS the employer itself publishes to), not a job aggregator, scraper, or cached copy. Each was probed directly on verified_on and the observed result recorded. This file is the single source of truth for what 'search coverage' means in a generated report -- the report prints what was ACTUALLY reached at run time, including failures, never this file's optimistic list.",
+  "schema_version": 1,
+  "sources": [
+    {
+      "key": "gartner",
+      "company": "Gartner",
+      "ats": "workday",
+      "tenant": "gartner",
+      "site": "EXT",
+      "host": "wd5",
+      "on_priority_list": true,
+      "verified_on": "2026-10-11",
+      "observed": "HTTP 200, total=219 postings for searchText='analyst'."
+    },
+    {
+      "key": "jll",
+      "company": "JLL",
+      "ats": "workday",
+      "tenant": "jll",
+      "site": "jllcareers",
+      "host": "wd1",
+      "on_priority_list": true,
+      "verified_on": "2026-10-11",
+      "observed": "HTTP 200, total=248 postings for searchText='analyst'."
+    },
+    {
+      "key": "blackstone",
+      "company": "Blackstone",
+      "ats": "workday",
+      "tenant": "blackstone",
+      "site": "Blackstone_Careers",
+      "host": "wd1",
+      "on_priority_list": true,
+      "verified_on": "2026-10-11",
+      "observed": "HTTP 200, total=34 postings for searchText='analyst'."
+    },
+    {
+      "key": "momentum",
+      "company": "Momentum",
+      "ats": "greenhouse",
+      "board_token": "momentumcompany3",
+      "on_priority_list": false,
+      "verified_on": "2026-10-11",
+      "observed": "HTTP 200, 14 postings on the board.",
+      "note": "Not on the 51-company priority list, but deliberately in coverage: two Momentum requisitions are already in the canonical ledger as submitted, so this source exercises the duplicate-prevention path against REAL history rather than a contrived case."
+    },
+    {
+      "key": "elixirr",
+      "company": "Elixirr",
+      "ats": "greenhouse",
+      "board_token": "elixirr",
+      "on_priority_list": false,
+      "verified_on": "2026-10-11",
+      "observed": "HTTP 200, 16 postings on the board."
+    }
+  ],
+  "probed_and_rejected": [
+    {"target": "costar / External / wd1", "result": "HTTP 404", "note": "CoStar's public feed is Eightfold, not Workday; its own registry entry also records a requisition-level no-sponsorship blocker."},
+    {"target": "marriott / MarriottUS / wd1", "result": "HTTP 422", "note": "Wrong site id; a correct one may exist and was not pursued."},
+    {"target": "hilton / Hilton / wd1", "result": "HTTP 422", "note": "Wrong site id; a correct one may exist and was not pursued."},
+    {"target": "cushwake / Cushman_Wakefield / wd1", "result": "HTTP 422", "note": "Wrong site id; a correct one may exist and was not pursued."},
+    {"target": "nielseniq / NIQ / wd3", "result": "HTTP 401", "note": "Requires authentication."},
+    {"target": "palantir, zillow (greenhouse)", "result": "HTTP 404", "note": "Not on Greenhouse under those board tokens."}
+  ],
+  "known_coverage_limits": [
+    "Five employers is NOT the 51-company priority list. Any report generated from this file covers these five only, and says so explicitly.",
+    "CBRE (Taleo) and CoStar (Eightfold) are deliberately absent: both are recorded in company_registry.json as blocked by employer sponsorship policy against the user's confirmed future_sponsorship_required=true.",
+    "A 422/404 above means THIS probe's site id was wrong, not that the employer has no official feed. These are unfinished leads, not proof of absence."
+  ]
+}
