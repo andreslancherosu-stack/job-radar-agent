@@ -1,6 +1,6 @@
 # Primera sesión de Job Radar
 
-Esta versión usa Copilot en modo Agent o Claude Code como motor de IA. Python aporta herramientas para leer, validar y guardar las evaluaciones. No es todavía una aplicación independiente que busque ofertas automáticamente.
+DESACTUALIZADO: esto describía la primera versión. Ahora `agent.py` contiene su propio bucle de llamadas a la API de Anthropic y se ejecuta solo desde la terminal, sin Copilot ni Claude Code en tiempo de ejecución. Busca ofertas de forma programática en las APIs oficiales de cinco empleadores. Lee el README.md para la versión actual; esta guía sirve solo como introducción a las herramientas deterministas de `radar.py`.
 
 1. Abre esta carpeta en VS Code con File > Open Folder.
 2. Abre Terminal > New Terminal.

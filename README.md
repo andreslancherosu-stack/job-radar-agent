@@ -1,10 +1,67 @@
 # Job Radar Agent
 
-BUAN 6V99 solo mini-project. Evaluate a small batch of job postings for an operations professional moving into analytics and applied AI, then automate the repetitive parts of filling out an application. Return up to two evidenced recommendations and a verification queue. Preserve structured memory and require user confirmation to record applications or submit anything.
+BUAN 6V99 solo mini-project. A local Python program that discovers real job openings from official employer APIs, judges them against a verified profile using the Anthropic API, writes a dated Excel report with evidence, and opens the application pages. It never submits an application.
 
-This is a tool-using agent configuration for Copilot Agent or Claude Code, with Python tools. The coding assistant supplies the LLM and tool loop by default. `radar.py` alone is NOT an AI agent; it performs validation, storage and filtering. `apply.py` is the browser-automation core for the application-filling step; it also is not an AI agent by itself — a plan is prepared and approved by a human before it runs. `run_demo.py` is a scripted fixture replay, NOT a model demonstration.
+## The graded core: a handwritten LLM tool-calling loop
 
-A separate, optional standalone integration (`llm_client.py`) can call the Anthropic API directly, without a live chat session — see "Optional standalone LLM integration" below. It is inert unless `ANTHROPIC_API_KEY` is set, and one run of it (or of a chat session) is not proof the whole program has a generally working runtime LLM connection; each is its own piece of evidence, reported separately in `docs/APPLY_VALIDATION.md` and `docs/VALIDATION.md`. Job discovery beyond pasted text is limited to `import_posting.py fetch URL`, a plain HTTP GET with no JavaScript execution and no search — not broad web discovery.
+`agent.py` owns the loop. There is no framework — no LangChain, no LangGraph, no hosted agent runtime — and no coding assistant in the loop at runtime. It calls the Anthropic Messages API directly through the official SDK:
+
+1. Call the API with the task, the conversation so far, and the tool definitions.
+2. Read the tool calls the model requested out of the response content blocks.
+3. Validate each tool name and its arguments, then execute the real Python function.
+4. Send the actual results back, each tagged with its own `tool_use_id`.
+5. Call the model again with the extended conversation.
+6. Stop on a final answer, a required human answer, the **25-iteration ceiling**, or a 180-second wall-clock budget.
+
+**Facts and judgment are separate, and it is enforced rather than described.** Python retrieves postings, checks the application ledger, validates that every quoted piece of evidence appears verbatim in the real posting, writes the workbook and opens URLs. The model decides what suits the candidate and in what order. There is deliberately **no fit score anywhere in Python** — no weighting table, no ranking function. A tool that computed suitability and asked the model to restate it would make the model decorative.
+
+Both ceilings are real. Hitting either writes a workbook named `..._PARTIAL.xlsx`, stamped `PARTIAL` inside, and exits non-zero. A budget-limited run cannot report as completed.
+
+## Run the demonstration
+
+```powershell
+python -m pip install -r requirements.txt
+copy .env.example .env          # then put your real Anthropic key in .env
+python agent.py check           # confirms configuration without calling the API
+```
+
+Then either double-click **`Start_Job_Radar.cmd`** (Windows menu, see `README_MENU.md`) or run it directly:
+
+```powershell
+python agent.py radar --max-steps 25 --task "Review these job opportunities against my verified profile. Tell me which I should prioritize, which require clarification, and which I should skip. Explain the evidence and avoid duplicate applications."
+```
+
+Verify the artefact afterwards — reading it back, not trusting the file size:
+
+```powershell
+python verify_report.py
+```
+
+`.env` is git-ignored and must never be committed. `python agent.py check` reports whether a key is configured without printing it.
+
+Measured end to end, four complete runs: **133s, 154s, 160s, 186s**, each using 11–12 of the 25 allowed iterations. A typical run costs roughly **$0.70** at published list prices (an estimate, not a reading of the account invoice).
+
+## Actual discovery coverage: five employers
+
+Discovery is programmatic against official, employer-controlled endpoints — not a scraper and not an aggregator. `sources.json` records every probe and its result:
+
+| Company | ATS | On the priority list |
+|---|---|---|
+| Gartner | Workday | yes |
+| JLL | Workday | yes |
+| Blackstone | Workday | yes |
+| Momentum | Greenhouse | no — included deliberately |
+| Elixirr | Greenhouse | no |
+
+Momentum is in coverage on purpose: two of its requisitions are already recorded as submitted, so duplicate prevention is exercised against real history rather than a contrived case.
+
+**Five employers is not a complete job search.** It is not the candidate's 51-company priority list, and the generated report says so on its own coverage sheet. Employers absent from `sources.json` are absent because no working official feed is wired up for them — never because they were ruled out. Four probes failed on a wrong site id; those are unfinished leads, not proof of absence.
+
+A posting appearing in a search result means the employer's API listed it at that moment. That is **not** proof the vacancy still accepts applicants, and the agent is required to say so.
+
+## The other pieces
+
+`radar.py` is deterministic validation, storage and filtering — not an AI agent. `apply.py` is browser automation for filling an approved application; it never clicks submit. `run_demo.py` is a scripted fixture replay, **not** a model demonstration. `llm_client.py` is an older, narrower standalone API call that predates `agent.py`; the graded loop is `agent.py`.
 
 ## Application filling (v0.2 vertical slice)
 
@@ -69,7 +126,7 @@ setx ANTHROPIC_API_KEY "sk-ant-your-key-here"     # new terminal needed afterwar
 python llm_client.py check
 python llm_client.py assess private/postings_drafts/<file>.json
 ```
-Its output schema is unit-tested against `radar.DIMENSIONS` so the two paths cannot silently drift apart, but the network call itself has not been exercised in this environment — no key is configured here (`python llm_client.py check` reports `"anthropic_api_key_configured": false`). It does not read `private/history_reference.md` (e.g. the Toyota-exclusion policy), so treat an API-produced assessment as narrower than a chat-produced one until that gap is closed.
+Its output schema is unit-tested against `radar.DIMENSIONS`. This module predates `agent.py` and is NOT the graded loop -- it makes a single call, not an agent loop. It also does not read `private/history_reference.md`, so treat its output as narrower. Use `agent.py` instead.
 
 ## Start on Windows
 1. Extract the ZIP into its own folder and open that folder in VS Code.
@@ -122,7 +179,7 @@ The flag prevents accidental invocation; it is not authentication. A tool-enable
 ## MVP decisions
 Prefer up to two qualified targets over exactly two. Missing authorization evidence means VERIFY. A good skills match cannot override a hard eligibility blocker. Unknown graduation/authorization details must be resolved where material. No numeric fit percentage or hiring probability is fabricated. Same-day targets remain stable. A past application remains a historical submission even if later judged a poor fit.
 
-Original requirements deliberately deferred: autonomous internet search (only a direct-URL fetch exists), scheduled check-ins, streaks, weekly metrics, CV/resume tailoring (cover-letter drafting exists; editing the CV document itself does not), history import and automatic replacement of stale targets. Historical five applications are kept as a reference, not imported into a new counter. Do not present this as the complete master-prompt product.
+Original requirements deliberately deferred: scheduled check-ins, streaks, weekly metrics, CV/resume tailoring (cover-letter drafting exists; editing the CV document itself does not), history import and automatic replacement of stale targets. (Programmatic discovery is NO LONGER deferred -- see 'Actual discovery coverage' above -- but it reaches five employers, not the open web.) Historical five applications are kept as a reference, not imported into a new counter. Do not present this as the complete master-prompt product.
 
 Known limitations: single-user sequential file writes; no concurrent writers; snapshots cannot be refreshed in place; current-source validation requires a new review; hard filters depend on model extraction and human verification; quote matching is not semantic validation; no host-enforced sandbox. A production version needs stronger isolation and source-refresh support.
 
@@ -142,7 +199,7 @@ git commit -m "Add initial Job Radar tools and fictional validation cases"
 ```
 Connect your own GitHub repository through your normal workflow. Invite the instructor and TA if private. This package has not created a remote repository. Make later commits for real changes you review and test; do not fabricate a development history.
 
-AI assistance: this initial scaffold, policy consolidation, fixtures and tests were generated by ChatGPT. Andrés's personal problem, supplied requirements and profile informed the design. His own review and understanding have not yet been demonstrated; document those truthfully in docs/LEARNING_GUIDE.md.
+AI assistance, stated plainly: the initial scaffold, policy consolidation, fixtures and tests were generated with ChatGPT; the agent loop (`agent.py`), discovery layer (`discovery.py`), radar toolset (`radar_tools.py`), report builders and the terminal menu were developed with Claude Code. The personal problem, requirements, profile and every judgment call about what counts as honest reporting are the author's. Claude Code was used to BUILD the program; it is not part of the program's runtime -- `agent.py` calls the Anthropic API itself and runs standalone from a terminal.
 
 Official host references:
 - https://code.visualstudio.com/docs/agents/overview
